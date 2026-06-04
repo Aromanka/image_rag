@@ -25,12 +25,33 @@ the CSV paths to point to your own images.
 
 ```bash
 test -d /root/autodl-tmp/model/jina_clip
-python -c "from embedding import get_embedding_model; m = get_embedding_model(); print(m)"
+python -c "from embedding import resolve_model_path; print(resolve_model_path())"
+python -c "from embedding import get_embedding_model; m = get_embedding_model(); print(type(m))"
 python -c "from embedding import encode_query; print(len(encode_query('worker wearing a safety helmet')))"
 ```
 
-The final command should print `1024`, matching `EMBED_TRUNCATE_DIM` in
-`config.py`.
+The resolved directory must contain a `config.json` whose `model_type` is
+`jina_clip`. The final command should print `1024`, matching
+`EMBED_TRUNCATE_DIM` in `config.py`.
+
+If no valid snapshot is found, inspect the local download:
+
+```bash
+find /root/autodl-tmp/model/jina_clip -name config.json -print
+python -c "import json; print(json.load(open('/root/autodl-tmp/model/jina_clip/config.json')).get('model_type'))"
+```
+
+The configured directory must contain a complete Hugging Face snapshot of
+`jinaai/jina-clip-v2`, not only weights or an unrelated `config.json`.
+
+To repair an incomplete local download:
+
+```bash
+hf download jinaai/jina-clip-v2 --local-dir /root/autodl-tmp/model/jina_clip
+```
+
+Because Jina CLIP v2 uses custom model code, the first load must also be able
+to obtain or locate the trusted `jinaai/jina-clip-implementation` code.
 
 ## 3. Build or rebuild both indexes
 
