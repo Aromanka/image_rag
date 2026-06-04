@@ -233,8 +233,8 @@ if __name__ == "__main__":
     main()
 
 """
-python build_inspecsafe_csv.py \
-  --data_root /root/autodl-tmp/data/inspecsafe \
-  --output_csv /data/InspecSafe/dataset.csv \
+python preprocess/InspecSafe_1.py \
+  --data_root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
+  --output_csv data/inspecsafe/dataset.csv \
   --split test
 """
