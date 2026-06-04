@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
@@ -9,6 +10,11 @@ from typing import Any, Sequence
 # Never let Hugging Face or Transformers fetch missing model files or code.
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# This inference-only application does not use Weights & Biases. Some timm
+# versions import it opportunistically, and a broken optional wandb install
+# must not prevent the local embedding model from loading.
+sys.modules["wandb"] = None
 
 import torch
 from PIL import Image

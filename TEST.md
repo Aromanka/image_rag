@@ -52,6 +52,20 @@ The configured directory must contain a complete Hugging Face snapshot of
 `jinaai/jina-clip-v2`, including its required custom model code. Copy a
 complete snapshot into the configured directory before running the pipeline.
 
+### Broken optional wandb installation
+
+This project does not use Weights & Biases. During local Jina model loading,
+some `timm` versions may try to import an installed `wandb` package. A
+mismatched `wandb` installation can fail with:
+
+```text
+AttributeError: module 'wandb.proto.wandb_internal_pb2' has no attribute 'Result'
+```
+
+`embedding.py` disables this optional training integration before loading the
+model, so it cannot block inference. The preceding `torch_dtype is deprecated`
+message is unrelated and is only a warning from the local model code.
+
 ## 3. Build or rebuild both indexes
 
 ```bash
