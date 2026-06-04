@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
@@ -10,11 +9,6 @@ from typing import Any, Sequence
 # Never let Hugging Face or Transformers fetch missing model files or code.
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
-# This inference-only application does not use Weights & Biases. Some timm
-# versions import it opportunistically, and a broken optional wandb install
-# must not prevent the local embedding model from loading.
-sys.modules["wandb"] = None
 
 import torch
 from PIL import Image
@@ -79,10 +73,11 @@ def _embedding_device() -> str:
 @lru_cache(maxsize=1)
 def get_embedding_model() -> Any:
     """Load the official Jina CLIP Transformers model."""
+    model_path = resolve_model_path()
     model = AutoModel.from_pretrained(
-        resolve_model_path(),
+        model_path,
         trust_remote_code=EMBED_TRUST_REMOTE_CODE,
-        local_files_only=True,
+        dtype="auto"
     )
     if not hasattr(model, "encode_text") or not hasattr(model, "encode_image"):
         raise TypeError(
