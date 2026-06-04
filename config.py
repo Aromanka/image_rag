@@ -4,8 +4,6 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_ROOT / "data"
-DATASET_CSV = DATA_DIR / "dataset.csv"
 CHROMA_DIR = PROJECT_ROOT / "chroma_db"
 
 CAPTION_COLLECTION = "jina_clip_v2_caption_rag"

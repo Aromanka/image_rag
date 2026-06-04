@@ -18,8 +18,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Place images referenced by `data/dataset.csv` under `data/images/`, or update
-the CSV paths to point to your own images.
+Ensure the image paths referenced by the dataset CSV are available on the
+machine building the indexes.
 
 ## 2. Verify the local Jina CLIP v2 model
 
@@ -56,12 +56,13 @@ to obtain or locate the trusted `jinaai/jina-clip-implementation` code.
 ## 3. Build or rebuild both indexes
 
 ```bash
-python build_index.py
+python build_index.py --dataset-csv data/InspecSafe/dataset.csv
 ```
 
 By default, each build deletes and recreates the two Jina CLIP v2 collections.
 Set `RESET_COLLECTIONS_ON_BUILD = False` in `config.py` only when incremental
-upserts are desired.
+upserts are desired. To build from another dataset, pass its CSV path through
+`--dataset-csv`.
 
 ## 4. Run the API
 

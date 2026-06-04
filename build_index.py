@@ -1,5 +1,6 @@
 """Build the caption and image embedding indexes from the dataset."""
 
+import argparse
 from pathlib import Path
 
 import chromadb
@@ -9,7 +10,6 @@ from PIL import Image, UnidentifiedImageError
 from config import (
     CAPTION_COLLECTION,
     CHROMA_DIR,
-    DATASET_CSV,
     EMBED_BATCH_SIZE,
     EMBED_MODEL_PATH,
     EMBED_TRUNCATE_DIM,
@@ -28,11 +28,11 @@ def resolve_image_path(image_path: str) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
-def load_dataset() -> pd.DataFrame:
-    if not DATASET_CSV.is_file():
-        raise FileNotFoundError(f"Dataset not found: {DATASET_CSV}")
+def load_dataset(dataset_csv: Path) -> pd.DataFrame:
+    if not dataset_csv.is_file():
+        raise FileNotFoundError(f"Dataset not found: {dataset_csv}")
 
-    dataframe = pd.read_csv(DATASET_CSV, dtype={"id": str})
+    dataframe = pd.read_csv(dataset_csv, dtype={"id": str})
     missing_columns = REQUIRED_COLUMNS.difference(dataframe.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -47,8 +47,8 @@ def load_dataset() -> pd.DataFrame:
     return dataframe
 
 
-def build_indexes() -> None:
-    dataframe = load_dataset()
+def build_indexes(dataset_csv: Path) -> None:
+    dataframe = load_dataset(dataset_csv)
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
     if RESET_COLLECTIONS_ON_BUILD:
@@ -128,5 +128,19 @@ def build_indexes() -> None:
     print(f"Built both indexes with {len(dataframe)} items in {CHROMA_DIR}.")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build caption and image indexes from a dataset CSV."
+    )
+    parser.add_argument(
+        "--dataset-csv",
+        "--dataset_csv",
+        required=True,
+        type=Path,
+        help="Path to the dataset CSV file.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    build_indexes()
+    build_indexes(parse_args().dataset_csv)
