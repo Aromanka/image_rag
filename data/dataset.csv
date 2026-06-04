@@ -1,0 +1,5 @@
+id,image_path,caption,safe_label
+0001,data/images/0001.jpg,"A worker wearing a helmet and safety vest.",safe
+0002,data/images/0002.jpg,"A worker without a helmet near an excavator.",unsafe
+0003,data/images/0003.jpg,"Several workers standing beside scaffolding.",unsafe
+

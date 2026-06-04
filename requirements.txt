@@ -1,0 +1,8 @@
+chromadb
+fastapi
+numpy
+pandas
+pillow
+sentence-transformers
+uvicorn
+
