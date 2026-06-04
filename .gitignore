@@ -4,4 +4,4 @@ __pycache__/
 chroma_db/
 .pytest_cache/
 .plan
-
+.data
