@@ -10,7 +10,7 @@ from retriever import hybrid_search, search_by_caption, search_by_image_embeddin
 
 app = FastAPI(
     title="Construction Safety Image RAG",
-    description="Caption, CLIP image, and hybrid retrieval APIs.",
+    description="Caption, SigLIP2 image, and hybrid retrieval APIs.",
     version="0.1.0",
 )
 
@@ -50,4 +50,3 @@ def hybrid(request: QueryRequest):
 @app.post("/rag/answer")
 def rag(request: QueryRequest):
     return execute(answer, request)
-

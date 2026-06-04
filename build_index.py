@@ -12,7 +12,6 @@ from config import (
     CHROMA_DIR,
     EMBED_BATCH_SIZE,
     EMBED_MODEL_PATH,
-    EMBED_TRUNCATE_DIM,
     IMAGE_COLLECTION,
     PROJECT_ROOT,
     RESET_COLLECTIONS_ON_BUILD,
@@ -63,7 +62,6 @@ def build_indexes(dataset_csv: Path) -> None:
     collection_metadata = {
         "hnsw:space": "cosine",
         "embedding_model": EMBED_MODEL_PATH,
-        "embedding_dimension": EMBED_TRUNCATE_DIM,
     }
     caption_collection = client.get_or_create_collection(
         CAPTION_COLLECTION,

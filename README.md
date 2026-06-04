@@ -1,7 +1,7 @@
 # Image RAG
 
-A construction-safety Image RAG framework using one local
-`jinaai/jina-clip-v2` model for both caption and image embeddings.
+A construction-safety Image RAG framework using one local SigLIP2 model from
+`/root/autodl-tmp/model/siglip2` for both caption and image embeddings.
 Model loading is offline-only and never downloads missing model files or code.
 
 Supported retrieval modes:
@@ -22,7 +22,7 @@ InspecSafe CSV, and start the API:
 ```bash
 # Skip this command when dependencies are already installed.
 python -m pip install --no-index --find-links /path/to/local/wheelhouse -r requirements.txt
-python build_index.py --dataset-csv data/inspecsafe/dataset.csv
+python build_index.py --dataset-csv data/InspecSafe/dataset.csv
 uvicorn app:app --reload
 ```
 
@@ -32,3 +32,6 @@ the example path with your local package directory.
 The database builder requires `--dataset-csv`, so another dataset can be used
 by passing its CSV path to the same command. Each CSV must contain the columns
 `id`, `image_path`, `caption`, and `safe_label`.
+
+Rebuild the indexes after changing encoders. SigLIP2 embeddings are not
+compatible with indexes created by the previous encoder.
