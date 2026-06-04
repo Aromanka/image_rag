@@ -4,17 +4,15 @@ from functools import lru_cache
 from typing import Any
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 from config import (
     CAPTION_COLLECTION,
     CHROMA_DIR,
-    CLIP_MODEL,
     IMAGE_COLLECTION,
     MAX_TOP_K,
-    TEXT_EMBED_MODEL,
     TOP_K,
 )
+from embedding import encode_query
 
 
 SearchResult = dict[str, Any]
@@ -36,16 +34,6 @@ def _validate_top_k(top_k: int) -> int:
 @lru_cache(maxsize=1)
 def _client():
     return chromadb.PersistentClient(path=str(CHROMA_DIR))
-
-
-@lru_cache(maxsize=1)
-def _text_model() -> SentenceTransformer:
-    return SentenceTransformer(TEXT_EMBED_MODEL)
-
-
-@lru_cache(maxsize=1)
-def _clip_model() -> SentenceTransformer:
-    return SentenceTransformer(CLIP_MODEL)
 
 
 def _collection(name: str):
@@ -76,42 +64,41 @@ def _format_results(results: dict[str, Any]) -> list[SearchResult]:
     return output
 
 
-def search_by_caption(query: str, top_k: int = TOP_K) -> list[SearchResult]:
-    query = _validate_query(query)
-    top_k = _validate_top_k(top_k)
-    collection = _collection(CAPTION_COLLECTION)
+def _search_collection(
+    collection_name: str,
+    embedding: list[float],
+    top_k: int,
+) -> list[SearchResult]:
+    collection = _collection(collection_name)
     item_count = collection.count()
     if item_count == 0:
-        raise RuntimeError(f"Index collection '{CAPTION_COLLECTION}' is empty.")
-    embedding = _text_model().encode(query).tolist()
+        raise RuntimeError(f"Index collection '{collection_name}' is empty.")
     results = collection.query(
         query_embeddings=[embedding],
         n_results=min(top_k, item_count),
     )
     return _format_results(results)
+
+
+def search_by_caption(query: str, top_k: int = TOP_K) -> list[SearchResult]:
+    query = _validate_query(query)
+    top_k = _validate_top_k(top_k)
+    return _search_collection(CAPTION_COLLECTION, encode_query(query), top_k)
 
 
 def search_by_image_embedding(query: str, top_k: int = TOP_K) -> list[SearchResult]:
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
-    collection = _collection(IMAGE_COLLECTION)
-    item_count = collection.count()
-    if item_count == 0:
-        raise RuntimeError(f"Index collection '{IMAGE_COLLECTION}' is empty.")
-    embedding = _clip_model().encode(query).tolist()
-    results = collection.query(
-        query_embeddings=[embedding],
-        n_results=min(top_k, item_count),
-    )
-    return _format_results(results)
+    return _search_collection(IMAGE_COLLECTION, encode_query(query), top_k)
 
 
 def hybrid_search(query: str, top_k: int = TOP_K) -> list[SearchResult]:
     """Fuse both ranked lists using reciprocal rank fusion."""
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
-    caption_results = search_by_caption(query, top_k)
-    image_results = search_by_image_embedding(query, top_k)
+    embedding = encode_query(query)
+    caption_results = _search_collection(CAPTION_COLLECTION, embedding, top_k)
+    image_results = _search_collection(IMAGE_COLLECTION, embedding, top_k)
 
     fused: dict[str, SearchResult] = {}
     for source, results in (
