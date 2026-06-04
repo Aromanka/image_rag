@@ -5,7 +5,12 @@ from pydantic import BaseModel, Field
 
 from config import MAX_TOP_K, TOP_K
 from rag_answer import answer
-from retriever import hybrid_search, search_by_caption, search_by_image_embedding
+from retriever import (
+    hybrid_search,
+    save_retrieved_images,
+    search_by_caption,
+    search_by_image_embedding,
+)
 
 
 app = FastAPI(
@@ -18,6 +23,10 @@ app = FastAPI(
 class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=TOP_K, ge=1, le=MAX_TOP_K)
+
+
+class CaptionQueryRequest(QueryRequest):
+    test_mode: bool = False
 
 
 def execute(operation, request: QueryRequest):
@@ -33,8 +42,14 @@ def health() -> dict[str, str]:
 
 
 @app.post("/search/caption")
-def caption_search(request: QueryRequest):
-    return execute(search_by_caption, request)
+def caption_search(request: CaptionQueryRequest):
+    results = execute(search_by_caption, request)
+    if not request.test_mode:
+        return results
+    try:
+        return save_retrieved_images(results)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/search/image")

@@ -84,6 +84,16 @@ curl -X POST "http://127.0.0.1:8000/search/hybrid" -H "Content-Type: application
 curl -X POST "http://127.0.0.1:8000/rag/answer" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
 ```
 
+To copy caption-search results directly into the flat project-root `demo/`
+folder, enable test mode:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5,"test_mode":true}'
+```
+
+Each test-mode result also includes its copied `demo_path`. Existing files in
+`demo/` are preserved; matching rank/ID filenames are overwritten.
+
 ## 6. Basic retrieval latency check
 
 The first request includes local model loading and is expected to be slower.

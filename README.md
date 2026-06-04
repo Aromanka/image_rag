@@ -35,3 +35,10 @@ by passing its CSV path to the same command. Each CSV must contain the columns
 
 Rebuild the indexes after changing encoders. SigLIP2 embeddings are not
 compatible with indexes created by the previous encoder.
+
+For a visual caption-search test, send `"test_mode": true`. Retrieved images
+are copied directly into the project-root `demo/` folder:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5,"test_mode":true}'
+```

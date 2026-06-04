@@ -5,6 +5,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CHROMA_DIR = PROJECT_ROOT / "chroma_db"
+DEMO_DIR = PROJECT_ROOT / "demo"
 
 CAPTION_COLLECTION = "siglip2_caption_rag"
 IMAGE_COLLECTION = "siglip2_image_rag"

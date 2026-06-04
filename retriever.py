@@ -1,6 +1,9 @@
 """Retrieval services for caption, image, and hybrid search."""
 
 from functools import lru_cache
+from pathlib import Path
+import re
+import shutil
 from typing import Any
 
 import chromadb
@@ -8,14 +11,45 @@ import chromadb
 from config import (
     CAPTION_COLLECTION,
     CHROMA_DIR,
+    DEMO_DIR,
     IMAGE_COLLECTION,
     MAX_TOP_K,
+    PROJECT_ROOT,
     TOP_K,
 )
 from embedding import encode_query
 
 
 SearchResult = dict[str, Any]
+
+
+def save_retrieved_images(results: list[SearchResult]) -> list[SearchResult]:
+    """Copy retrieved images directly into the flat demo directory."""
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    saved_results: list[SearchResult] = []
+
+    for rank, result in enumerate(results, start=1):
+        stored_path = str(result.get("image_path", "")).strip()
+        source_path = Path(stored_path)
+        if not source_path.is_absolute():
+            source_path = PROJECT_ROOT / source_path
+        if not source_path.is_file():
+            raise FileNotFoundError(
+                f"Retrieved image not found for ID {result.get('id', '')}: "
+                f"{source_path}"
+            )
+
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(result.get("id", "")))
+        destination = DEMO_DIR / f"{rank:02d}_{safe_id}_{source_path.name}"
+        shutil.copy2(source_path, destination)
+        saved_results.append(
+            {
+                **result,
+                "demo_path": str(destination.relative_to(PROJECT_ROOT)),
+            }
+        )
+
+    return saved_results
 
 
 def _validate_query(query: str) -> str:
