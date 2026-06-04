@@ -6,6 +6,10 @@ The project is configured to load `jinaai/jina-clip-v2` from:
 /root/autodl-tmp/model/jina_clip
 ```
 
+Model loading is strictly offline. The application never downloads missing
+model files or custom model code; startup fails if the local snapshot is
+incomplete.
+
 All commands below are intended to be run from the project root on the AutoDL
 Linux host.
 
@@ -14,9 +18,12 @@ Linux host.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --no-index --find-links /path/to/local/wheelhouse -r requirements.txt
 ```
+
+Skip the installation command when dependencies are already installed.
+Otherwise, replace the example wheelhouse path with a local directory
+containing all required packages. Do not use an online package index.
 
 Ensure the image paths referenced by the dataset CSV are available on the
 machine building the indexes.
@@ -34,7 +41,7 @@ The resolved directory must contain a `config.json` whose `model_type` is
 `jina_clip`. The final command should print `1024`, matching
 `EMBED_TRUNCATE_DIM` in `config.py`.
 
-If no valid snapshot is found, inspect the local download:
+If no valid snapshot is found, inspect the local model directory:
 
 ```bash
 find /root/autodl-tmp/model/jina_clip -name config.json -print
@@ -42,16 +49,8 @@ python -c "import json; print(json.load(open('/root/autodl-tmp/model/jina_clip/c
 ```
 
 The configured directory must contain a complete Hugging Face snapshot of
-`jinaai/jina-clip-v2`, not only weights or an unrelated `config.json`.
-
-To repair an incomplete local download:
-
-```bash
-hf download jinaai/jina-clip-v2 --local-dir /root/autodl-tmp/model/jina_clip
-```
-
-Because Jina CLIP v2 uses custom model code, the first load must also be able
-to obtain or locate the trusted `jinaai/jina-clip-implementation` code.
+`jinaai/jina-clip-v2`, including its required custom model code. Copy a
+complete snapshot into the configured directory before running the pipeline.
 
 ## 3. Build or rebuild both indexes
 

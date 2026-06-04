@@ -9,8 +9,9 @@ CHROMA_DIR = PROJECT_ROOT / "chroma_db"
 CAPTION_COLLECTION = "jina_clip_v2_caption_rag"
 IMAGE_COLLECTION = "jina_clip_v2_image_rag"
 
-# Local Hugging Face snapshot of jinaai/jina-clip-v2.
+# Complete local Hugging Face snapshot of jinaai/jina-clip-v2.
 EMBED_MODEL_PATH = "/root/autodl-tmp/model/jina_clip"
+# Allows the custom model code bundled in the local snapshot to execute.
 EMBED_TRUST_REMOTE_CODE = True
 EMBED_NORMALIZE = True
 EMBED_TRUNCATE_DIM = 1024

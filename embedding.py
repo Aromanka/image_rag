@@ -1,9 +1,14 @@
 """Shared jina-clip-v2 encoder for text and images."""
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
+
+# Never let Hugging Face or Transformers fetch missing model files or code.
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 import torch
 from PIL import Image
@@ -71,6 +76,7 @@ def get_embedding_model() -> Any:
     model = AutoModel.from_pretrained(
         resolve_model_path(),
         trust_remote_code=EMBED_TRUST_REMOTE_CODE,
+        local_files_only=True,
     )
     if not hasattr(model, "encode_text") or not hasattr(model, "encode_image"):
         raise TypeError(
