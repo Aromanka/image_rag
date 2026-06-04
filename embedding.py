@@ -32,25 +32,8 @@ def resolve_model_path() -> str:
     """Resolve a direct local model directory or nested local snapshot."""
     configured_path = Path(EMBED_MODEL_PATH).expanduser()
     if not configured_path.is_dir():
-        raise FileNotFoundError(
-            f"SigLIP2 model directory does not exist: {configured_path}"
-        )
-
-    direct_config = configured_path / "config.json"
-    if _is_siglip2_config(direct_config):
-        return str(configured_path)
-
-    snapshot_configs = sorted(configured_path.glob("**/snapshots/*/config.json"))
-    other_configs = sorted(configured_path.glob("**/config.json"))
-    for config_path in snapshot_configs + other_configs:
-        if _is_siglip2_config(config_path):
-            return str(config_path.parent)
-
-    raise ValueError(
-        "No valid SigLIP2 snapshot was found under "
-        f"{configured_path}. Its config.json must have 'model_type': 'siglip2'. "
-        "Point EMBED_MODEL_PATH at a complete local SigLIP2 snapshot."
-    )
+        raise FileNotFoundError(f"SigLIP2 model directory does not exist: {configured_path}")
+    return str(configured_path)
 
 
 @lru_cache(maxsize=1)
