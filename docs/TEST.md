@@ -1,16 +1,14 @@
 # Run and Test Guide
 
-The project uses the local SigLIP2 model at:
+All commands below are intended to run from the project root on the AutoDL
+Linux host.
+
+The local model paths are configured in `config.py`:
 
 ```text
 /root/autodl-tmp/model/siglip2
+/root/autodl-tmp/model/qwenvl_2_5_3B
 ```
-
-Model loading is strictly offline. Missing model or processor files cause
-startup to fail instead of being downloaded.
-
-All commands below are intended to run from the project root on the AutoDL
-Linux host.
 
 ## 1. Prepare the environment
 
@@ -20,92 +18,144 @@ source .venv/bin/activate
 python -m pip install --no-index --find-links /path/to/local/wheelhouse -r requirements.txt
 ```
 
-Skip installation when dependencies are already available. Otherwise, replace
-the example wheelhouse path with a local directory containing all required
-packages. Do not use an online package index.
+Skip installation when dependencies are already available. Replace
+`/path/to/local/wheelhouse` with your local package directory if needed.
 
-Ensure the image paths referenced by the dataset CSV are available on the
-machine building the indexes.
+## 2. Static checks
 
-## 2. Verify the local SigLIP2 model
+These checks do not load the local models.
+
+```bash
+python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retriever.py vlm_inference.py
+python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety judgement'))"
+```
+
+The printed prompt should contain:
+
+```text
+Is the following image a safe scenario?
+```
+
+## 3. Verify dependencies and model paths
 
 ```bash
 test -d /root/autodl-tmp/model/siglip2
+test -d /root/autodl-tmp/model/qwenvl_2_5_3B
+python -c "import chromadb, torch, transformers, qwen_vl_utils; print('deps ok')"
+```
+
+Verify SigLIP2 can load and encode a text query:
+
+```bash
 python -c "from embedding import resolve_model_path; print(resolve_model_path())"
 python -c "from embedding import get_embedding_model, get_embedding_processor; print(type(get_embedding_model()), type(get_embedding_processor()))"
 python -c "from embedding import encode_query; print(len(encode_query('worker wearing a safety helmet')))"
 ```
 
-The resolved directory must contain a complete SigLIP2 Transformers snapshot,
-including `config.json`, model weights, tokenizer files, and processor files.
-Its `config.json` must have `"model_type": "siglip2"`.
-
-If validation fails, inspect the local directory:
-
-```bash
-find /root/autodl-tmp/model/siglip2 -maxdepth 3 -type f -print
-python -c "import json; print(json.load(open('/root/autodl-tmp/model/siglip2/config.json')).get('model_type'))"
-```
-
-## 3. Build or rebuild both indexes
+## 4. Build or rebuild indexes
 
 ```bash
 python build_index.py --dataset-csv data/InspecSafe/dataset.csv
 ```
 
-By default, each build deletes and recreates the two SigLIP2 collections.
-Set `RESET_COLLECTIONS_ON_BUILD = False` in `config.py` only when incremental
-upserts are desired. To build from another dataset, pass its CSV path through
-`--dataset-csv`.
+This creates both Chroma collections under `chroma_db/`. Rebuild the indexes
+after changing the embedding model or dataset.
 
-Do not reuse vectors created by another encoder. The application uses new
-SigLIP2 collection names, and the build command must run before querying them.
+## 5. Choose a query image
 
-## 4. Run the API
+Use any local image path. To reuse the first image from the dataset CSV:
+
+```bash
+export QUERY_IMAGE="$(python - <<'PY'
+import pandas as pd
+df = pd.read_csv('data/InspecSafe/dataset.csv')
+print(df.iloc[0]['image_path'])
+PY
+)"
+echo "$QUERY_IMAGE"
+test -f "$QUERY_IMAGE"
+```
+
+## 6. Test retrieval-only RAG inputs
+
+Test image-to-image retrieval for the query image:
+
+```bash
+python - <<'PY'
+import os
+from retriever import search_by_query_image
+
+results = search_by_query_image(os.environ['QUERY_IMAGE'], top_k=3)
+for item in results:
+    print(item['id'], item['safe_label'], item['caption'])
+PY
+```
+
+Test prompt construction before running Qwen2.5-VL:
+
+```bash
+python - <<'PY'
+import os
+from config import DEFAULT_SAFETY_QUERY
+from rag_answer import build_image_rag_prompt
+from retriever import search_by_query_image
+
+retrieved = search_by_query_image(os.environ['QUERY_IMAGE'], top_k=3)
+prompt = build_image_rag_prompt(DEFAULT_SAFETY_QUERY, retrieved)
+print(prompt)
+PY
+```
+
+## 7. Test VLM inference from Python
+
+Baseline inference uses only the query image:
+
+```bash
+python - <<'PY'
+import os
+from vlm_inference import VLM_inference
+
+result = VLM_inference('safety judgement', os.environ['QUERY_IMAGE'])
+print(result['output'])
+PY
+```
+
+RAG inference retrieves similar images and captions, builds the RAG prompt, and
+then calls Qwen2.5-VL:
+
+```bash
+python - <<'PY'
+import os
+from vlm_inference import VLM_inference_with_RAG
+
+result = VLM_inference_with_RAG('safety judgement', os.environ['QUERY_IMAGE'], top_k=5)
+print('Retrieved IDs:', [item['id'] for item in result['retrieved']])
+print(result['output'])
+PY
+```
+
+You can also run the same workflows through the CLI:
+
+```bash
+python vlm_inference.py "$QUERY_IMAGE" --baseline
+python vlm_inference.py "$QUERY_IMAGE" --top-k 5
+```
+
+## 8. Test API endpoints
+
+Start the API in one terminal:
 
 ```bash
 uvicorn app:app --reload
 ```
 
-Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
-
-## 5. Test API endpoints
-
-Run these commands in a second terminal while the API is running.
+Run these in a second terminal:
 
 ```bash
 curl "http://127.0.0.1:8000/health"
+curl -X POST "http://127.0.0.1:8000/search/query-image" -H "Content-Type: application/json" -d "{\"query_image\":\"$QUERY_IMAGE\",\"top_k\":5}"
+curl -X POST "http://127.0.0.1:8000/vlm/inference" -H "Content-Type: application/json" -d "{\"task_type\":\"safety judgement\",\"query_image\":\"$QUERY_IMAGE\"}"
+curl -X POST "http://127.0.0.1:8000/vlm/rag-inference" -H "Content-Type: application/json" -d "{\"task_type\":\"safety judgement\",\"query_image\":\"$QUERY_IMAGE\",\"top_k\":5}"
 ```
 
-```bash
-curl -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-curl -X POST "http://127.0.0.1:8000/search/image" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-curl -X POST "http://127.0.0.1:8000/search/hybrid" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-curl -X POST "http://127.0.0.1:8000/rag/answer" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-```
-
-To copy caption-search results directly into the flat project-root `demo/`
-folder, enable test mode:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5,"test_mode":true}'
-```
-
-Each test-mode result also includes its copied `demo_path`. Existing files in
-`demo/` are preserved; matching rank/ID filenames are overwritten.
-
-## 6. Basic retrieval latency check
-
-The first request includes local model loading and is expected to be slower.
-
-```bash
-curl -s -o /dev/null -w "caption: %{time_total}s\n" -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-curl -s -o /dev/null -w "image: %{time_total}s\n" -X POST "http://127.0.0.1:8000/search/image" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-curl -s -o /dev/null -w "hybrid: %{time_total}s\n" -X POST "http://127.0.0.1:8000/search/hybrid" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5}'
-```
-
-## 7. Optional static checks
-
-```bash
-python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retriever.py
-```
+The RAG inference response should include `retrieved`, `prompt`, and `output`.

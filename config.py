@@ -18,3 +18,10 @@ RESET_COLLECTIONS_ON_BUILD = True
 
 TOP_K = 5
 MAX_TOP_K = 50
+
+SUPPORTED_TASK_TYPES = {"safety judgement"}
+DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
+
+VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
+VLM_PROCESSOR_PATH = VLM_MODEL_PATH
+VLM_MAX_NEW_TOKENS = 256

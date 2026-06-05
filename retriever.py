@@ -7,6 +7,7 @@ import shutil
 from typing import Any
 
 import chromadb
+from PIL import Image, UnidentifiedImageError
 
 from config import (
     CAPTION_COLLECTION,
@@ -17,7 +18,7 @@ from config import (
     PROJECT_ROOT,
     TOP_K,
 )
-from embedding import encode_query
+from embedding import encode_images, encode_query
 
 
 SearchResult = dict[str, Any]
@@ -63,6 +64,15 @@ def _validate_top_k(top_k: int) -> int:
     if not 1 <= top_k <= MAX_TOP_K:
         raise ValueError(f"top_k must be between 1 and {MAX_TOP_K}.")
     return top_k
+
+
+def resolve_query_image_path(query_image: str | Path) -> Path:
+    path = Path(query_image).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    if not path.is_file():
+        raise FileNotFoundError(f"Query image not found: {path}")
+    return path
 
 
 @lru_cache(maxsize=1)
@@ -124,6 +134,22 @@ def search_by_image_embedding(query: str, top_k: int = TOP_K) -> list[SearchResu
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
     return _search_collection(IMAGE_COLLECTION, encode_query(query), top_k)
+
+
+def search_by_query_image(
+    query_image: str | Path,
+    top_k: int = TOP_K,
+) -> list[SearchResult]:
+    """Retrieve visually similar examples for a local query image."""
+    top_k = _validate_top_k(top_k)
+    image_path = resolve_query_image_path(query_image)
+    try:
+        with Image.open(image_path) as source_image:
+            embedding = encode_images([source_image.convert("RGB")])[0]
+    except UnidentifiedImageError as exc:
+        raise ValueError(f"Invalid query image: {image_path}") from exc
+
+    return _search_collection(IMAGE_COLLECTION, embedding, top_k)
 
 
 def hybrid_search(query: str, top_k: int = TOP_K) -> list[SearchResult]:

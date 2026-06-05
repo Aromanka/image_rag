@@ -10,6 +10,7 @@ Supported retrieval modes:
 - Text-to-image retrieval
 - Hybrid retrieval with reciprocal rank fusion
 - Retrieval-grounded safety reasoning prompt generation
+- Qwen2.5-VL baseline and RAG inference for safety judgement
 
 The configured model path and embedding options are in `config.py`. All setup,
 indexing, run, and test commands are documented in `TEST.md`.
@@ -42,3 +43,17 @@ are copied directly into the project-root `demo/` folder:
 ```bash
 curl -X POST "http://127.0.0.1:8000/search/image" -H "Content-Type: application/json" -d '{"query":"worker has helmet","top_k":5,"test_mode":true}'
 ```
+
+## Run VLM inference
+
+The Qwen2.5-VL model path defaults to
+`/root/autodl-tmp/model/qwenvl_2_5_3B`. The main Python interfaces are:
+
+```python
+from vlm_inference import VLM_inference, VLM_inference_with_RAG
+
+baseline = VLM_inference("safety judgement", "/path/to/query.jpg")
+rag = VLM_inference_with_RAG("safety judgement", "/path/to/query.jpg")
+```
+
+Both use the default query: `Is the following image a safe scenario?`

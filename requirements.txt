@@ -1,8 +1,10 @@
 chromadb
+accelerate
 fastapi
 numpy
 pandas
 pillow
+qwen-vl-utils
 sentencepiece
 torch>=2.0
 transformers>=4.50.0,<5.0
