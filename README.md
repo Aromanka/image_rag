@@ -22,7 +22,7 @@ InspecSafe CSV, and start the API:
 ```bash
 # Skip this command when dependencies are already installed.
 python -m pip install --no-index --find-links /path/to/local/wheelhouse -r requirements.txt
-python build_index.py --dataset-csv data/InspecSafe/dataset.csv
+python build_index.py --dataset-csv data/inspecsafe/dataset.csv
 uvicorn app:app --reload
 ```
 
@@ -40,5 +40,5 @@ For a visual caption-search test, send `"test_mode": true`. Retrieved images
 are copied directly into the project-root `demo/` folder:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/search/caption" -H "Content-Type: application/json" -d '{"query":"worker without helmet near excavator","top_k":5,"test_mode":true}'
+curl -X POST "http://127.0.0.1:8000/search/image" -H "Content-Type: application/json" -d '{"query":"worker has helmet","top_k":5,"test_mode":true}'
 ```
