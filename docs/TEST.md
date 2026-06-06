@@ -143,24 +143,28 @@ This messages list is processed by `_run_vlm_messages` which calls
 ### Run from Python
 
 ```bash
-python - <<'PY'
-import os
-from vlm_inference import VLM_inference
+# RAG mode, first 10 samples
+python vlm_inference.py --limit 10
 
-result = VLM_inference('safety judgement', os.environ['QUERY_IMAGE'])
-print(result['output'])
-PY
+# Baseline mode, samples 20-29
+python vlm_inference.py --baseline --offset 20 --limit 10
+
+# Custom dataset
+python vlm_inference.py --dataset-csv path/to/dataset.csv --top-k 3
 ```
 
+### Evaluate Model Ability
+1. Evaluate all samples with RAG mode (default)
 ```bash
-python - <<'PY'
-import os
-from vlm_inference import VLM_inference_with_RAG
-
-result = VLM_inference_with_RAG('safety judgement', os.environ['QUERY_IMAGE'], top_k=5)
-print('Retrieved IDs:', [item['id'] for item in result['retrieved']])
-print(result['output'])
-PY
+python evaluate_inspecsafe.py --dataset-csv data/InspecSafe/dataset.csv
+```
+1. Evaluate first 50 samples in baseline mode
+```bash
+python evaluate_inspecsafe.py --mode baseline --limit 50
+```
+1. Evaluate samples 100-149 with RAG, top-k=3
+```bash
+python evaluate_inspecsafe.py --mode rag --top-k 3 --offset 100 --limit 50
 ```
 
 ### Run from CLI

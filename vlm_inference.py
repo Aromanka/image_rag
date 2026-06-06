@@ -218,11 +218,11 @@ def VLM_inference_with_RAG(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Qwen2.5-VL safety inference.")
-    parser.add_argument("query_image", type=Path, help="Path to the query image.")
     parser.add_argument(
-        "--task-type",
-        default="safety judgement",
-        choices=sorted(SUPPORTED_TASK_TYPES),
+        "--dataset-csv",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "InspecSafe" / "dataset.csv",
+        help="Path to the dataset CSV.",
     )
     parser.add_argument(
         "--baseline",
@@ -231,20 +231,60 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
+    parser.add_argument("--limit", type=int, default=None, help="Max samples to run.")
+    parser.add_argument("--offset", type=int, default=0, help="Samples to skip.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
+    import pandas as pd
+    from evaluate_inspecsafe import extract_label
+
     args = parse_args()
-    operation = VLM_inference if args.baseline else VLM_inference_with_RAG
-    result = operation(
-        args.task_type,
-        args.query_image,
-        top_k=args.top_k,
-        max_new_tokens=args.max_new_tokens,
-    ) if not args.baseline else operation(
-        args.task_type,
-        args.query_image,
-        max_new_tokens=args.max_new_tokens,
-    )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    df = pd.read_csv(args.dataset_csv)
+    df = df.iloc[args.offset:]
+    if args.limit is not None:
+        df = df.iloc[: args.limit]
+
+    mode = "baseline" if args.baseline else "rag"
+    total = len(df)
+    correct = 0
+    evaluated = 0
+
+    print(f"Mode: {mode} | Samples: {total} | top_k: {args.top_k}")
+    print("-" * 60)
+
+    for _, row in df.iterrows():
+        sample_id = row["id"]
+        image_path = row["image_path"]
+        ground_truth = str(row["safe_label"]).strip().lower()
+
+        try:
+            if args.baseline:
+                result = VLM_inference(
+                    "safety judgement", image_path,
+                    max_new_tokens=args.max_new_tokens,
+                )
+            else:
+                result = VLM_inference_with_RAG(
+                    "safety judgement", image_path,
+                    top_k=args.top_k,
+                    max_new_tokens=args.max_new_tokens,
+                )
+
+            predicted = extract_label(result["output"])
+            is_correct = predicted == ground_truth
+            if is_correct:
+                correct += 1
+            evaluated += 1
+
+            tag = "OK" if is_correct else "WRONG"
+            print(f"[{sample_id}] {tag} | truth={ground_truth} pred={predicted}")
+            print(f"  Output: {result['output'][:120]}")
+
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            print(f"[{sample_id}] ERROR - {exc}")
+
+    print("-" * 60)
+    accuracy = correct / evaluated if evaluated > 0 else 0.0
+    print(f"Accuracy: {accuracy:.4f} ({correct}/{evaluated})")
