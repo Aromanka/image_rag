@@ -15,6 +15,7 @@ from config import (
     VLM_MODEL_PATH,
     VLM_PROCESSOR_PATH,
 )
+from retriever import save_retrieved_images
 
 
 def _validate_task_type(task_type: str) -> str:
@@ -191,6 +192,7 @@ def VLM_inference_with_RAG(
     query: str | None = None,
     top_k: int = TOP_K,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+    debug_mode: bool = False
 ) -> dict[str, Any]:
     """Retrieve similar examples, build a RAG prompt, and run Qwen2.5-VL."""
     from rag_answer import build_rag_messages
@@ -200,6 +202,8 @@ def VLM_inference_with_RAG(
     query = query or _default_query_for_task(task_type)
     image_path = _resolve_query_image_path(query_image)
     retrieved = search_by_query_image(query_image, top_k=top_k)
+    if debug_mode:
+        save_retrieved_images(retrieved)
     messages = build_rag_messages(query, image_path, retrieved)
     output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)
     return {
