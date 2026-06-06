@@ -110,6 +110,43 @@ def _run_vlm(
     return output_text[0] if output_text else ""
 
 
+def _run_vlm_messages(
+    messages: list[dict[str, Any]],
+    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+) -> str:
+    """Run Qwen2.5-VL with a pre-built messages list (multi-image support)."""
+    model, processor, process_vision_info, torch = _vlm_components()
+
+    text = processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = inputs.to(_model_input_device(model, torch))
+
+    with torch.inference_mode():
+        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):]
+        for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )
+    return output_text[0] if output_text else ""
+
+
 def build_baseline_prompt(task_type: str, query: str | None = None) -> str:
     query = query or _default_query_for_task(task_type)
     return f"""You are a construction safety visual inspection assistant.
@@ -156,20 +193,21 @@ def VLM_inference_with_RAG(
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
 ) -> dict[str, Any]:
     """Retrieve similar examples, build a RAG prompt, and run Qwen2.5-VL."""
-    from rag_answer import build_image_rag_prompt
+    from rag_answer import build_rag_messages
     from retriever import search_by_query_image
 
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
+    image_path = _resolve_query_image_path(query_image)
     retrieved = search_by_query_image(query_image, top_k=top_k)
-    prompt = build_image_rag_prompt(query, retrieved)
-    output = _run_vlm(query_image, prompt, max_new_tokens=max_new_tokens)
+    messages = build_rag_messages(query, image_path, retrieved)
+    output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)
     return {
         "task_type": task_type,
-        "query_image": str(_resolve_query_image_path(query_image)),
+        "query_image": str(image_path),
         "query": query,
         "retrieved": retrieved,
-        "prompt": prompt,
+        "prompt": messages,
         "output": output,
     }
 

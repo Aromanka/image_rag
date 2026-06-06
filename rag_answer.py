@@ -1,8 +1,9 @@
 """Build safety reasoning prompts from retrieved historical examples."""
 
+from pathlib import Path
 from typing import Any
 
-from config import TOP_K
+from config import PROJECT_ROOT, TOP_K
 from retriever import hybrid_search
 
 
@@ -81,6 +82,53 @@ Retrieved evidence:
 Reasoning:
 Final label: safe or unsafe
 """
+
+
+def build_rag_messages(
+    query: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build Qwen2.5-VL messages with retrieved images as proper content blocks.
+
+    Each retrieved example is passed as an actual image followed by a text
+    annotation, so the VLM can see the reference images rather than just reading
+    file paths as text.
+    """
+    content: list[dict[str, str]] = []
+
+    for i, item in enumerate(retrieved_items, 1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({
+            "type": "text",
+            "text": f"Reference {i}: {item['caption']} (label: {item['safe_label']})",
+        })
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            f"Query Image: {query}\n"
+            "Classify ONLY this query image based on the reference examples above.\n\n"
+            "Return your answer in this format:\n"
+            "Query image observations:\n"
+            "Retrieved evidence:\n"
+            "Reasoning:\n"
+            "Final label: safe or unsafe"
+        ),
+    })
+
+    return [
+        {
+            "role": "system",
+            "content": "You are a construction safety visual inspection assistant. "
+            "Use the reference images to inform your judgement of the query image.",
+        },
+        {"role": "user", "content": content},
+    ]
 
 
 def answer(query: str, top_k: int = TOP_K) -> dict[str, Any]:

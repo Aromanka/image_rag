@@ -91,24 +91,56 @@ for item in results:
 PY
 ```
 
-Test prompt construction before running Qwen2.5-VL:
+Test multi-image message construction before running Qwen2.5-VL:
 
 ```bash
 python - <<'PY'
-import os
+import os, json
 from config import DEFAULT_SAFETY_QUERY
-from rag_answer import build_image_rag_prompt
+from rag_answer import build_rag_messages
 from retriever import search_by_query_image
 
-retrieved = search_by_query_image(os.environ['QUERY_IMAGE'], top_k=3)
-prompt = build_image_rag_prompt(DEFAULT_SAFETY_QUERY, retrieved)
-print(prompt)
+query_image = os.environ['QUERY_IMAGE']
+retrieved = search_by_query_image(query_image, top_k=3)
+messages = build_rag_messages(DEFAULT_SAFETY_QUERY, query_image, retrieved)
+print(json.dumps(messages, indent=2, ensure_ascii=False))
 PY
 ```
 
-## 7. Test VLM inference from Python
+The output should be a messages list where each retrieved image appears as a
+`{"type": "image", "image": "<absolute_path>"}` content block followed by a
+text annotation, with the query image last.
 
-Baseline inference uses only the query image:
+## 7. VLM inference
+
+### Inference logic
+
+**Baseline** (`VLM_inference`): passes a single query image + text prompt to
+Qwen2.5-VL. No retrieval context.
+
+**RAG** (`VLM_inference_with_RAG`): retrieves top-k similar images via
+`search_by_query_image`, then calls `build_rag_messages` to construct a
+multi-image messages list. Retrieved images are passed as actual image content
+blocks (not text paths) interleaved with text annotations, so Qwen2.5-VL can
+see both the reference images and the query image. The messages structure:
+
+```python
+[
+    {"role": "system", "content": "You are a construction safety..."},
+    {"role": "user", "content": [
+        {"type": "image", "image": "/path/to/ref1.jpg"},
+        {"type": "text", "text": "Reference 1: caption (label: safe)"},
+        ...
+        {"type": "image", "image": "/path/to/query.jpg"},
+        {"type": "text", "text": "Query Image: ... Classify ONLY this query image..."},
+    ]},
+]
+```
+
+This messages list is processed by `_run_vlm_messages` which calls
+`process_vision_info` and the processor to handle all images in the list.
+
+### Run from Python
 
 ```bash
 python - <<'PY'
@@ -119,9 +151,6 @@ result = VLM_inference('safety judgement', os.environ['QUERY_IMAGE'])
 print(result['output'])
 PY
 ```
-
-RAG inference retrieves similar images and captions, builds the RAG prompt, and
-then calls Qwen2.5-VL:
 
 ```bash
 python - <<'PY'
@@ -134,7 +163,7 @@ print(result['output'])
 PY
 ```
 
-You can also run the same workflows through the CLI:
+### Run from CLI
 
 ```bash
 python vlm_inference.py "$QUERY_IMAGE" --baseline
