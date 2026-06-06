@@ -132,7 +132,7 @@ def run_evaluation(
     print(f"Time elapsed:   {elapsed:.1f}s")
 
     # Save results to CSV
-    out_name = f"eval_results_{mode}_{int(time.time())}.csv"
+    out_name = f"save/eval_results_{mode}_{int(time.time())}.csv"
     out_path = PROJECT_ROOT / out_name
     pd.DataFrame(results).to_csv(out_path, index=False)
     print(f"Results saved:  {out_path}")

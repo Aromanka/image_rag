@@ -144,10 +144,10 @@ This messages list is processed by `_run_vlm_messages` which calls
 
 ```bash
 # RAG mode, first 10 samples
-python vlm_inference.py --limit 10
+python vlm_inference.py --limit 1 --dataset-csv data/inspecsafe/test.csv
 
 # Baseline mode, samples 20-29
-python vlm_inference.py --baseline --offset 20 --limit 10
+python vlm_inference.py --baseline --limit 1 --dataset-csv data/inspecsafe/test.csv
 
 # Custom dataset
 python vlm_inference.py --dataset-csv path/to/dataset.csv --top-k 3
@@ -156,11 +156,11 @@ python vlm_inference.py --dataset-csv path/to/dataset.csv --top-k 3
 ### Evaluate Model Ability
 1. Evaluate all samples with RAG mode (default)
 ```bash
-python evaluate_inspecsafe.py --dataset-csv data/InspecSafe/dataset.csv
+python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
 ```
 1. Evaluate first 50 samples in baseline mode
 ```bash
-python evaluate_inspecsafe.py --mode baseline --limit 50
+python evaluate_inspecsafe.py --mode baseline --limit 100 --dataset-csv data/inspecsafe/test.csv
 ```
 1. Evaluate samples 100-149 with RAG, top-k=3
 ```bash

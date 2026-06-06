@@ -5,5 +5,6 @@ chroma_db/
 demo/
 .pytest_cache/
 .plan
-data
+data/
+save/
 
