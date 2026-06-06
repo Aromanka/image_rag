@@ -33,5 +33,12 @@
                 "--dataset-csv", "data/inspecsafe/dataset.csv"
             ]
         },
+        {
+            "name": "always test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "test.py",
+            "console": "integratedTerminal"
+        },
     ]
 }
