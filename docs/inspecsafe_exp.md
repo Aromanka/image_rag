@@ -13,4 +13,8 @@ python preprocess/InspecSafe_1.py \
 ```bash
 python build_index.py --dataset-csv data/inspecsafe/train.csv
 ```
-3. 
+3. evaluate
+```bash
+python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
+python evaluate_inspecsafe.py --mode rag --top-k 3 --limit 10 --dataset-csv data/inspecsafe/test.csv
+```

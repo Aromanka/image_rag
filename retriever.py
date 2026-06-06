@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
-from typing import Any
+from typing import Any, Optional
 
 import chromadb
 from PIL import Image, UnidentifiedImageError
@@ -41,16 +41,29 @@ def save_retrieved_images(results: list[SearchResult]) -> list[SearchResult]:
             )
 
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(result.get("id", "")))
-        destination = DEMO_DIR / f"{rank:02d}_{safe_id}_{source_path.name}"
-        shutil.copy2(source_path, destination)
+        dst_filename = DEMO_DIR / f"{rank:02d}_{safe_id}_{source_path.name}"
+        dst_abs_path = copy_image_to_demo(source_path, dst_filename)
         saved_results.append(
             {
                 **result,
-                "demo_path": str(destination.relative_to(PROJECT_ROOT)),
+                "demo_path": str(dst_abs_path.relative_to(PROJECT_ROOT)),
             }
         )
 
     return saved_results
+
+def copy_image_to_demo(src_abs_path: Path, dst_filename: Optional[str] = None) -> Path:
+    if not src_abs_path.is_absolute():
+        raise ValueError(f"source path must be absolute path {src_abs_path}")
+    if not src_abs_path.is_file():
+        raise FileNotFoundError(f"source image does not exist {src_abs_path}")
+
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    if dst_filename is None:
+        dst_filename = src_abs_path.name
+    dst_path = DEMO_DIR / dst_filename
+    shutil.copy2(src_abs_path, dst_path)
+    return dst_path
 
 
 def _validate_query(query: str) -> str:

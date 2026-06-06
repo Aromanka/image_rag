@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from config import PROJECT_ROOT, TOP_K, VLM_MAX_NEW_TOKENS
+from tqdm import tqdm
 
 
 def extract_label(output: str) -> str | None:
@@ -64,15 +65,16 @@ def run_evaluation(
     print("-" * 60)
 
     start_time = time.time()
-
-    for idx, row in df.iterrows():
+    pbar = tqdm(df.iterrows(), total=total)
+    
+    for i, (idx, row) in enumerate(pbar):
         sample_id = row["id"]
         image_path = row["image_path"]
         ground_truth = str(row["safe_label"]).strip().lower()
 
         if ground_truth not in ("safe", "unsafe"):
-            print(f"[{sample_id}] SKIP - invalid ground truth: {row['safe_label']}")
             errors += 1
+            pbar.set_description(f"[{sample_id}] SKIP - invalid truth")
             continue
 
         try:
@@ -107,10 +109,16 @@ def run_evaluation(
                 "predicted": predicted,
                 "status": status,
             })
-            print(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
+            
+            pbar.set_description(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
+            
+            # calculate avg. time and ETA
+            elapsed = time.time() - start_time
+            avg_time = elapsed / (i + 1)
+            eta = avg_time * (total - i - 1)
+            pbar.set_postfix({"Avg": f"{avg_time:.2f}s", "ETA": f"{eta:.0f}s"})
 
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
-            print(f"[{sample_id}] ERROR - {exc}")
             errors += 1
             results.append({
                 "id": sample_id,
@@ -118,6 +126,8 @@ def run_evaluation(
                 "predicted": None,
                 "status": "ERROR",
             })
+            # update desc
+            pbar.set_description(f"[{sample_id}] ERROR - {exc}")
 
     elapsed = time.time() - start_time
     evaluated = total - errors
