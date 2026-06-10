@@ -110,9 +110,7 @@ def run_evaluation(
             }
             if mode == "rag":
                 sample_result["retrieved_image_paths"] = _retrieved_image_paths(result)
-            results.append(sample_result)
-            print(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
-            
+            results.append(sample_result)            
             pbar.set_description(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
             
             # calculate avg. time and ETA
