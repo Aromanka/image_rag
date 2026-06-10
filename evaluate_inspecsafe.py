@@ -1,35 +1,23 @@
 """Evaluate VLM inference accuracy on the InspecSafe dataset."""
 
 import argparse
-import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from config import PROJECT_ROOT, TOP_K, VLM_MAX_NEW_TOKENS
+from utils.evaluate_utils import evaluate_results_json, extract_label
 
 
-def extract_label(output: str) -> str | None:
-    """Extract safe/unsafe label from VLM output text.
-
-    Looks for 'Final label: safe' or 'Final label: unsafe' first,
-    then falls back to the last occurrence of 'safe' or 'unsafe'.
-    """
-    text = output.strip().lower()
-
-    # Primary: match "Final label: safe/unsafe"
-    match = re.search(r"final\s+label\s*:\s*(safe|unsafe)", text)
-    if match:
-        return match.group(1)
-
-    # Fallback: last standalone occurrence of safe/unsafe
-    matches = re.findall(r"\b(unsafe|safe)\b", text)
-    if matches:
-        return matches[-1]
-
-    return None
+def _retrieved_image_paths(result: dict[str, Any]) -> list[str]:
+    return [
+        str(item.get("image_path", ""))
+        for item in result.get("retrieved", [])
+        if item.get("image_path")
+    ]
 
 
 def run_evaluation(
@@ -56,7 +44,6 @@ def run_evaluation(
         sys.exit("No samples to evaluate after applying offset/limit.")
 
     total = len(df)
-    correct = 0
     errors = 0
     results = []
 
@@ -67,12 +54,22 @@ def run_evaluation(
 
     for idx, row in df.iterrows():
         sample_id = row["id"]
+        if hasattr(sample_id, "item"):
+            sample_id = sample_id.item()
         image_path = row["image_path"]
         ground_truth = str(row["safe_label"]).strip().lower()
 
         if ground_truth not in ("safe", "unsafe"):
             print(f"[{sample_id}] SKIP - invalid ground truth: {row['safe_label']}")
             errors += 1
+            results.append({
+                "id": sample_id,
+                "ground_truth": ground_truth,
+                "input_image_path": image_path,
+                "prompt": None,
+                "output": None,
+                "error": f"Invalid ground truth: {row['safe_label']}",
+            })
             continue
 
         try:
@@ -97,16 +94,21 @@ def run_evaluation(
                 errors += 1
             elif predicted == ground_truth:
                 status = "CORRECT"
-                correct += 1
             else:
                 status = "WRONG"
 
-            results.append({
+            sample_result = {
                 "id": sample_id,
                 "ground_truth": ground_truth,
+                "input_image_path": result.get("query_image", image_path),
+                "prompt": result.get("prompt"),
+                "output": result.get("output"),
                 "predicted": predicted,
                 "status": status,
-            })
+            }
+            if mode == "rag":
+                sample_result["retrieved_image_paths"] = _retrieved_image_paths(result)
+            results.append(sample_result)
             print(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
 
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -115,26 +117,45 @@ def run_evaluation(
             results.append({
                 "id": sample_id,
                 "ground_truth": ground_truth,
+                "input_image_path": image_path,
+                "prompt": None,
+                "output": None,
                 "predicted": None,
                 "status": "ERROR",
+                "error": str(exc),
             })
 
     elapsed = time.time() - start_time
-    evaluated = total - errors
-    accuracy = correct / evaluated if evaluated > 0 else 0.0
+    payload = {
+        "metadata": {
+            "dataset_csv": str(dataset_csv),
+            "mode": mode,
+            "top_k": top_k,
+            "max_new_tokens": max_new_tokens,
+            "limit": limit,
+            "offset": offset,
+            "elapsed_seconds": elapsed,
+        },
+        "results": results,
+    }
+
+    # Save evaluated results to JSON. The same utility can re-evaluate this
+    # artifact later if parsing logic changes.
+    out_name = f"save/eval_results_{mode}_{int(time.time())}.json"
+    out_path = PROJECT_ROOT / out_name
+    evaluated_payload = evaluate_results_json(payload, out_path)
+    summary = evaluated_payload["summary"]
 
     print("-" * 60)
-    print(f"Total samples:  {total}")
-    print(f"Evaluated:      {evaluated}")
-    print(f"Correct:        {correct}")
-    print(f"Errors/Skipped: {errors}")
-    print(f"Accuracy:       {accuracy:.4f} ({correct}/{evaluated})")
+    print(f"Total samples:  {summary['total']}")
+    print(f"Evaluated:      {summary['evaluated']}")
+    print(f"Correct:        {summary['correct']}")
+    print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+    print(
+        "Accuracy:       "
+        f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+    )
     print(f"Time elapsed:   {elapsed:.1f}s")
-
-    # Save results to CSV
-    out_name = f"save/eval_results_{mode}_{int(time.time())}.csv"
-    out_path = PROJECT_ROOT / out_name
-    pd.DataFrame(results).to_csv(out_path, index=False)
     print(f"Results saved:  {out_path}")
 
 
@@ -181,3 +202,4 @@ if __name__ == "__main__":
         limit=args.limit,
         offset=args.offset,
     )
+
