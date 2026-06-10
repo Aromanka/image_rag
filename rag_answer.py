@@ -7,6 +7,43 @@ from config import PROJECT_ROOT, TOP_K
 from retriever import hybrid_search
 
 
+CONSTRUCTIONSITE10K_SYSTEM_PROMPT = """You are a professional construction site safety inspector with expertise in hazard identification and regulatory compliance.
+
+Carefully analyze the provided construction site image and assess safety compliance step by step.
+
+## Safety Rules
+
+Rule 1 - Personal Protective Equipment (PPE):
+All workers on foot must wear: hard hats, clothes covering shoulders and legs, toe-covering shoes. When cutting/welding/grinding/drilling: face shields or safety glasses. At night: high-visibility retroreflective vests.
+
+Rule 2 - Working at Height:
+Workers at heights >= 3 meters with unprotected edges must wear a safety harness.
+
+Rule 3 - Edge Protection:
+Underground excavations >= 3 meters deep with steep retaining walls require guardrails or warning fences when workers are present.
+
+Rule 4 - Excavator Proximity:
+No worker shall appear in the blind spots or within the operation radius of an active excavator, or any excavator with an operator inside.
+
+## Instructions
+
+Step 1 - Scene Description: Describe what you observe including workers, positions, activities, equipment, and environment.
+Step 2 - Rule Analysis: For each rule, state whether it is complied with or violated with specific visual evidence.
+Step 3 - Output the following JSON only, no extra text:
+
+{
+  "annotation": "<detailed scene description>",
+  "violations": [
+    {
+      "rule": <rule_id as integer>,
+      "reason": "<specific visual evidence>"
+    }
+  ]
+}
+
+If no violations are found, return an empty list for violations."""
+
+
 def build_prompt(query: str, retrieved_items: list[dict[str, Any]]) -> str:
     examples = []
     for index, item in enumerate(retrieved_items, start=1):
@@ -127,6 +164,46 @@ def build_rag_messages(
             "content": "You are a construction safety visual inspection assistant. "
             "Use the reference images to inform your judgement of the query image.",
         },
+        {"role": "user", "content": content},
+    ]
+
+
+def build_constructionsite10k_rag_messages(
+    query: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build multi-image RAG messages for ConstructionSite-10K rule detection."""
+    content: list[dict[str, str]] = []
+
+    for index, item in enumerate(retrieved_items, start=1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+
+        rules = item.get("violation_rules") or "none"
+        annotation = item.get("caption", "")
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({
+            "type": "text",
+            "text": (
+                f"Reference {index}: {annotation}\n"
+                f"Ground-truth violation rules: {rules}"
+            ),
+        })
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            f"Query image task: {query}\n"
+            "Use the reference examples for visual context only. "
+            "Classify the query image under rules 1-4 and return JSON only."
+        ),
+    })
+
+    return [
+        {"role": "system", "content": CONSTRUCTIONSITE10K_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from config import (
+    CONSTRUCTIONSITE10K_TASK,
     DEFAULT_SAFETY_QUERY,
+    DEFAULT_CONSTRUCTIONSITE10K_QUERY,
     PROJECT_ROOT,
     SUPPORTED_TASK_TYPES,
     TOP_K,
@@ -27,7 +29,9 @@ def _validate_task_type(task_type: str) -> str:
 
 
 def _default_query_for_task(task_type: str) -> str:
-    _validate_task_type(task_type)
+    task_type = _validate_task_type(task_type)
+    if task_type == CONSTRUCTIONSITE10K_TASK:
+        return DEFAULT_CONSTRUCTIONSITE10K_QUERY
     return DEFAULT_SAFETY_QUERY
 
 
@@ -149,7 +153,17 @@ def _run_vlm_messages(
 
 
 def build_baseline_prompt(task_type: str, query: str | None = None) -> str:
+    task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
+    if task_type == CONSTRUCTIONSITE10K_TASK:
+        from rag_answer import CONSTRUCTIONSITE10K_SYSTEM_PROMPT
+
+        return f"""{CONSTRUCTIONSITE10K_SYSTEM_PROMPT}
+
+Question for the query image:
+{query}
+"""
+
     return f"""You are a construction safety visual inspection assistant.
 
 Question for the query image:
@@ -195,7 +209,7 @@ def VLM_inference_with_RAG(
     debug_mode: bool = False
 ) -> dict[str, Any]:
     """Retrieve similar examples, build a RAG prompt, and run Qwen2.5-VL."""
-    from rag_answer import build_rag_messages
+    from rag_answer import build_constructionsite10k_rag_messages, build_rag_messages
     from retriever import search_by_query_image
 
     task_type = _validate_task_type(task_type)
@@ -205,8 +219,11 @@ def VLM_inference_with_RAG(
     if debug_mode:
         print(f"images saved for debug_mode")
         save_retrieved_images(retrieved)
-        copy_image_to_demo(Path(query_image), "query_image.png")
-    messages = build_rag_messages(query, image_path, retrieved)
+        copy_image_to_demo(image_path, "query_image.png")
+    if task_type == CONSTRUCTIONSITE10K_TASK:
+        messages = build_constructionsite10k_rag_messages(query, image_path, retrieved)
+    else:
+        messages = build_rag_messages(query, image_path, retrieved)
     output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)
     return {
         "task_type": task_type,

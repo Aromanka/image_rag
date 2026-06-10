@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from utils.evaluate_utils import evaluate_results_json
+    from utils.evaluate_utils import (
+        evaluate_constructionsite10k_results_json,
+        evaluate_results_json,
+    )
 except ModuleNotFoundError:
-    from evaluate_utils import evaluate_results_json
+    from evaluate_utils import evaluate_constructionsite10k_results_json, evaluate_results_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +80,17 @@ def _selected_samples(
     if include_all:
         return results
     return [sample for sample in results if str(sample.get("id")) in sample_ids]
+
+
+def _detect_dataset_type(results_json: Path) -> str:
+    with results_json.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    results = payload.get("results", []) if isinstance(payload, dict) else payload
+    if isinstance(results, list) and results:
+        first = results[0]
+        if isinstance(first, dict) and "ground_truth_output" in first:
+            return "constructionsite10k"
+    return "inspecsafe"
 
 
 def export_sample_details(
@@ -157,6 +171,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional evaluated JSON path. Defaults to overwriting input JSON.",
     )
+    parser.add_argument(
+        "--dataset-type",
+        choices=["auto", "inspecsafe", "constructionsite10k"],
+        default="auto",
+        help="Evaluation metric type for the saved JSON.",
+    )
     return parser.parse_args()
 
 
@@ -168,7 +188,15 @@ def main() -> None:
         sys.exit("Provide --sample-ids, --sample-id-file, or --all.")
 
     output_json = args.output_json if args.output_json is not None else args.results_json
-    payload = evaluate_results_json(args.results_json, output_json)
+    dataset_type = (
+        _detect_dataset_type(args.results_json)
+        if args.dataset_type == "auto"
+        else args.dataset_type
+    )
+    if dataset_type == "constructionsite10k":
+        payload = evaluate_constructionsite10k_results_json(args.results_json, output_json)
+    else:
+        payload = evaluate_results_json(args.results_json, output_json)
     exported = export_sample_details(
         payload,
         sample_ids=sample_ids,
@@ -177,14 +205,22 @@ def main() -> None:
     )
 
     summary = payload["summary"]
-    print(f"Total samples:  {summary['total']}")
-    print(f"Evaluated:      {summary['evaluated']}")
-    print(f"Correct:        {summary['correct']}")
-    print(f"Errors/Skipped: {summary['errors_or_skipped']}")
-    print(
-        "Accuracy:       "
-        f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
-    )
+    if dataset_type == "constructionsite10k":
+        print(f"Total samples:  {summary['total_samples']}")
+        print(f"Valid samples:  {summary['valid_samples']}")
+        print(f"Parse failures: {summary['parse_failures']}")
+        print(f"Exact match:    {summary['exact_match_acc']:.4f}")
+        print(f"Safe/unsafe:    {summary['safe_unsafe_acc']:.4f}")
+        print(f"Macro F1:       {summary['macro_f1']:.4f}")
+    else:
+        print(f"Total samples:  {summary['total']}")
+        print(f"Evaluated:      {summary['evaluated']}")
+        print(f"Correct:        {summary['correct']}")
+        print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(
+            "Accuracy:       "
+            f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+        )
     print(f"Exported:       {exported}")
     print(f"Demo dir:       {Path(args.demo_dir).resolve()}")
 

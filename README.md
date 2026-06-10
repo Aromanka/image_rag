@@ -44,6 +44,14 @@ are copied directly into the project-root `demo/` folder:
 curl -X POST "http://127.0.0.1:8000/search/image" -H "Content-Type: application/json" -d '{"query":"worker has helmet","top_k":5,"test_mode":true}'
 ```
 
+## Run the Constructionsite_10k pipeline
+```
+py build_index.py --constructionsite-json constructionsite_10k/train.json
+py build_index.py --constructionsite-json constructionsite_10k/train.json
+py evaluate_constructionsite10k.py --dataset-json constructionsite_10k/test.json --mode rag --limit 10
+py utils\evaluate_rag_details.py save\eval_results_constructionsite10k_rag_XXXX.json --sample-ids 0000005 0000007
+```
+
 ## Run VLM inference
 
 The Qwen2.5-VL model path defaults to

@@ -109,15 +109,9 @@ def _format_results(results: dict[str, Any]) -> list[SearchResult]:
     metadatas = results.get("metadatas", [[]])[0]
 
     for item_id, distance, metadata in zip(ids, distances, metadatas):
-        output.append(
-            {
-                "id": item_id,
-                "distance": float(distance),
-                "image_path": metadata.get("image_path", ""),
-                "caption": metadata.get("caption", ""),
-                "safe_label": metadata.get("safe_label", ""),
-            }
-        )
+        item = dict(metadata or {})
+        item.update({"id": item_id, "distance": float(distance)})
+        output.append(item)
     return output
 
 
