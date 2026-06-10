@@ -158,11 +158,11 @@ python vlm_inference.py --dataset-csv path/to/dataset.csv --top-k 3
 ```bash
 python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
 ```
-1. Evaluate first 50 samples in baseline mode
+2. Evaluate first 50 samples in baseline mode
 ```bash
-python evaluate_inspecsafe.py --mode baseline --limit 100 --dataset-csv data/inspecsafe/test.csv
+python evaluate_inspecsafe.py --mode baseline --dataset-csv data/inspecsafe/test.csv --limit 500
 ```
-1. Evaluate samples 100-149 with RAG, top-k=3
+3. Evaluate samples 100-149 with RAG, top-k=3
 ```bash
 python evaluate_inspecsafe.py --mode rag --top-k 3 --offset 100 --limit 50
 ```
