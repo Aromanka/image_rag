@@ -28,4 +28,4 @@ DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 
 VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
-VLM_MAX_NEW_TOKENS = 256
+VLM_MAX_NEW_TOKENS = 2048
