@@ -10,6 +10,7 @@ import pandas as pd
 
 from config import PROJECT_ROOT, TOP_K, VLM_MAX_NEW_TOKENS
 from utils.evaluate_utils import evaluate_results_json, extract_label
+from tqdm import tqdm
 
 
 def _retrieved_image_paths(result: dict[str, Any]) -> list[str]:
@@ -51,8 +52,9 @@ def run_evaluation(
     print("-" * 60)
 
     start_time = time.time()
-
-    for idx, row in df.iterrows():
+    pbar = tqdm(df.iterrows(), total=total)
+    
+    for i, (idx, row) in enumerate(pbar):
         sample_id = row["id"]
         if hasattr(sample_id, "item"):
             sample_id = sample_id.item()
@@ -60,7 +62,6 @@ def run_evaluation(
         ground_truth = str(row["safe_label"]).strip().lower()
 
         if ground_truth not in ("safe", "unsafe"):
-            print(f"[{sample_id}] SKIP - invalid ground truth: {row['safe_label']}")
             errors += 1
             results.append({
                 "id": sample_id,
@@ -70,6 +71,7 @@ def run_evaluation(
                 "output": None,
                 "error": f"Invalid ground truth: {row['safe_label']}",
             })
+            pbar.set_description(f"[{sample_id}] SKIP - invalid truth")
             continue
 
         try:
@@ -110,9 +112,15 @@ def run_evaluation(
                 sample_result["retrieved_image_paths"] = _retrieved_image_paths(result)
             results.append(sample_result)
             print(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
-
+            
+            pbar.set_description(f"[{sample_id}] {status} | truth={ground_truth} pred={predicted}")
+            
+            # calculate avg. time and ETA
+            elapsed = time.time() - start_time
+            avg_time = elapsed / (i + 1)
+            eta = avg_time * (total - i - 1)
+            pbar.set_postfix({"Avg": f"{avg_time:.2f}s", "ETA": f"{eta:.0f}s"})
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
-            print(f"[{sample_id}] ERROR - {exc}")
             errors += 1
             results.append({
                 "id": sample_id,
@@ -124,6 +132,8 @@ def run_evaluation(
                 "status": "ERROR",
                 "error": str(exc),
             })
+            # update desc
+            pbar.set_description(f"[{sample_id}] ERROR - {exc}")
 
     elapsed = time.time() - start_time
     payload = {

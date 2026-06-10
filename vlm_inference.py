@@ -15,7 +15,7 @@ from config import (
     VLM_MODEL_PATH,
     VLM_PROCESSOR_PATH,
 )
-from retriever import save_retrieved_images
+from retriever import save_retrieved_images, copy_image_to_demo
 
 
 def _validate_task_type(task_type: str) -> str:
@@ -203,7 +203,9 @@ def VLM_inference_with_RAG(
     image_path = _resolve_query_image_path(query_image)
     retrieved = search_by_query_image(query_image, top_k=top_k)
     if debug_mode:
+        print(f"images saved for debug_mode")
         save_retrieved_images(retrieved)
+        copy_image_to_demo(Path(query_image), "query_image.png")
     messages = build_rag_messages(query, image_path, retrieved)
     output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)
     return {
@@ -263,13 +265,14 @@ if __name__ == "__main__":
             if args.baseline:
                 result = VLM_inference(
                     "safety judgement", image_path,
-                    max_new_tokens=args.max_new_tokens,
+                    max_new_tokens=args.max_new_tokens
                 )
             else:
                 result = VLM_inference_with_RAG(
                     "safety judgement", image_path,
                     top_k=args.top_k,
                     max_new_tokens=args.max_new_tokens,
+                    debug_mode=True
                 )
 
             predicted = extract_label(result["output"])
