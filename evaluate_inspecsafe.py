@@ -159,6 +159,14 @@ def run_evaluation(
     print(f"Evaluated:      {summary['evaluated']}")
     print(f"Correct:        {summary['correct']}")
     print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+    print(f"TP:             {summary['tp']}")
+    print(f"FP:             {summary['fp']}")
+    print(f"TN:             {summary['tn']}")
+    print(f"FN:             {summary['fn']}")
+    print("Confusion matrix (positive=unsafe):")
+    print("                Pred unsafe  Pred safe")
+    print(f"Truth unsafe    {summary['tp']:>11}  {summary['fn']:>9}")
+    print(f"Truth safe      {summary['fp']:>11}  {summary['tn']:>9}")
     print(
         "Accuracy:       "
         f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"

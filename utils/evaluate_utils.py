@@ -58,6 +58,10 @@ def evaluate_results_json(
     total = len(results)
     correct = 0
     errors = 0
+    tp = 0
+    fp = 0
+    tn = 0
+    fn = 0
 
     for sample in results:
         if not isinstance(sample, dict):
@@ -88,8 +92,16 @@ def evaluate_results_json(
         elif predicted == ground_truth:
             sample["status"] = "CORRECT"
             correct += 1
+            if predicted == "unsafe":
+                tp += 1
+            else:
+                tn += 1
         else:
             sample["status"] = "WRONG"
+            if predicted == "unsafe":
+                fp += 1
+            else:
+                fn += 1
 
     evaluated = total - errors
     data["summary"] = {
@@ -98,6 +110,10 @@ def evaluate_results_json(
         "correct": correct,
         "errors_or_skipped": errors,
         "accuracy": correct / evaluated if evaluated > 0 else 0.0,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
     }
 
     if output_json is not None:
@@ -351,7 +367,11 @@ if __name__ == "__main__":
         print(f"Parse failures: {summary['parse_failures']}")
         print(f"Exact match:    {summary['exact_match_acc']:.4f}")
         print(f"Safe/unsafe:    {summary['safe_unsafe_acc']:.4f}")
+        print(f"Macro Precision:{summary['macro_precision']:.4f}")
+        print(f"Macro Recall:   {summary['macro_recall']:.4f}")
         print(f"Macro F1:       {summary['macro_f1']:.4f}")
+        print(f"Micro Precision:{summary['micro_precision']:.4f}")
+        print(f"Micro Recall:   {summary['micro_recall']:.4f}")
         print(f"Micro F1:       {summary['micro_f1']:.4f}")
     else:
         evaluated = evaluate_results_json(args.results_json, args.output_json)
@@ -360,6 +380,14 @@ if __name__ == "__main__":
         print(f"Evaluated:      {summary['evaluated']}")
         print(f"Correct:        {summary['correct']}")
         print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(f"TP:             {summary['tp']}")
+        print(f"FP:             {summary['fp']}")
+        print(f"TN:             {summary['tn']}")
+        print(f"FN:             {summary['fn']}")
+        print("Confusion matrix (positive=unsafe):")
+        print("                Pred unsafe  Pred safe")
+        print(f"Truth unsafe    {summary['tp']:>11}  {summary['fn']:>9}")
+        print(f"Truth safe      {summary['fp']:>11}  {summary['tn']:>9}")
         print(
             "Accuracy:       "
             f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
