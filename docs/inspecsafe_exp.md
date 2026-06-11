@@ -16,6 +16,7 @@ python build_index.py --dataset-csv data/inspecsafe/train.csv
 3. evaluate
 ```bash
 python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
-python evaluate_inspecsafe.py --mode rag --top-k 3 --limit 10 --dataset-csv data/inspecsafe/test.csv
+python evaluate_inspecsafe.py --mode baseline --limit 1000 --dataset-csv data/inspecsafe/test.csv
+python evaluate_inspecsafe.py --mode rag --top-k 5 --limit 1000 --dataset-csv data/inspecsafe/test.csv
 python utils/evaluate_rag_details.py /root/autodl-tmp/code/image_rag/save/eval_results_rag_1781109580.json --sample-ids 1 2 3 4 5
 ```
