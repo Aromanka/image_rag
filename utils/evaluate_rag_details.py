@@ -128,10 +128,14 @@ def export_sample_details(
                 sample_dir / f"retrieved_{index:02d}{suffix}",
             )
 
+        # ['id', 'input_image_path', 'ground_truth_output', 'prompt', 'output', 'gt_annotation', 'gt_rules', 'pred_annotation', 'pred_rules', 'parse_failed', 'status'] constructionsite
         prompt_path = sample_dir / "prompt.txt"
         prompt_path.write_text(_prompt_to_text(sample.get("prompt")), encoding="utf-8")
         response_path = sample_dir / "response.txt"
         response_path.write_text(_prompt_to_text(sample.get("output")), encoding="utf-8")
+        gt_output_path = sample_dir / "gt_output.txt"
+        # gt_output_path.write_text(sample.get("ground_truth"), encoding="utf-8")   # inspecsafe
+        gt_output_path.write_text(sample.get("ground_truth_output"), encoding="utf-8")  # constructionsite
 
     return len(samples)
 
