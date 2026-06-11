@@ -130,6 +130,8 @@ def export_sample_details(
 
         prompt_path = sample_dir / "prompt.txt"
         prompt_path.write_text(_prompt_to_text(sample.get("prompt")), encoding="utf-8")
+        response_path = sample_dir / "response.txt"
+        response_path.write_text(_prompt_to_text(sample.get("output")), encoding="utf-8")
 
     return len(samples)
 

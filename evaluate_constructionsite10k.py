@@ -8,6 +8,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from tqdm import tqdm
 
 from config import (
     CONSTRUCTIONSITE10K_TASK,
@@ -112,8 +113,11 @@ def run_evaluation(
     results: list[dict[str, Any]] = []
     errors = 0
     start_time = time.time()
+    total = len(samples)
+    pbar = tqdm(list(range(0, total)))
 
-    for sample in samples:
+    for sample_idx in pbar:
+        sample = samples[sample_idx]
         image_path = _sample_image_path(sample, dataset_json, image_root)
         sample_id = image_path.stem
         query = _user_text(sample)
@@ -146,7 +150,6 @@ def run_evaluation(
             if mode == "rag":
                 sample_result["retrieved_image_paths"] = _retrieved_image_paths(result)
             results.append(sample_result)
-            print(f"[{sample_id}] inference complete")
 
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             errors += 1
@@ -159,6 +162,12 @@ def run_evaluation(
                 "output": None,
                 "error": str(exc),
             })
+        
+        # calculate avg. time and ETA
+        elapsed = time.time() - start_time
+        avg_time = elapsed / (sample_idx + 1)
+        eta = avg_time * (total - sample_idx - 1)
+        pbar.set_postfix({"Avg": f"{avg_time:.2f}s", "ETA": f"{eta:.0f}s"})
 
     elapsed = time.time() - start_time
     payload = {

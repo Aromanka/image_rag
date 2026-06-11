@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+import time
+from tqdm import tqdm
 
 import chromadb
 import pandas as pd
@@ -151,60 +153,67 @@ def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
     )
 
     rows = dataframe.to_dict(orient="records")
-    for start in range(0, len(rows), EMBED_BATCH_SIZE):
-        batch = rows[start : start + EMBED_BATCH_SIZE]
-        ids: list[str] = []
-        captions: list[str] = []
-        images: list[Image.Image] = []
-        metadatas: list[dict[str, str]] = []
+    total_batches = (len(rows) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
+    start_time = time.time()
+    
+    with tqdm(total=total_batches, desc="Processing batches") as pbar:
+        for start in range(0, len(rows), EMBED_BATCH_SIZE):
+            batch = rows[start : start + EMBED_BATCH_SIZE]
+            ids: list[str] = []
+            captions: list[str] = []
+            images: list[Image.Image] = []
+            metadatas: list[dict[str, str]] = []
 
-        for row in batch:
-            item_id = str(row["id"]).strip()
-            caption = str(row["caption"]).strip()
-            safe_label = str(row["safe_label"]).strip()
-            stored_image_path = str(row["image_path"]).strip()
-            image_path = resolve_image_path(stored_image_path)
+            for row in batch:
+                item_id = str(row["id"]).strip()
+                caption = str(row["caption"]).strip()
+                safe_label = str(row["safe_label"]).strip()
+                stored_image_path = str(row["image_path"]).strip()
+                image_path = resolve_image_path(stored_image_path)
 
-            if not item_id or not caption or not stored_image_path:
-                raise ValueError(f"ID, image_path, and caption are required: {row}")
-            if not image_path.is_file():
-                raise FileNotFoundError(f"Image not found for ID {item_id}: {image_path}")
+                if not item_id or not caption or not stored_image_path:
+                    raise ValueError(f"ID, image_path, and caption are required: {row}")
+                if not image_path.is_file():
+                    raise FileNotFoundError(f"Image not found for ID {item_id}: {image_path}")
 
-            try:
-                with Image.open(image_path) as source_image:
-                    images.append(source_image.convert("RGB"))
-            except UnidentifiedImageError as exc:
-                raise ValueError(f"Invalid image for ID {item_id}: {image_path}") from exc
+                try:
+                    with Image.open(image_path) as source_image:
+                        images.append(source_image.convert("RGB"))
+                except UnidentifiedImageError as exc:
+                    raise ValueError(f"Invalid image for ID {item_id}: {image_path}") from exc
 
-            ids.append(item_id)
-            captions.append(caption)
-            metadatas.append(
-                {
-                    "image_path": stored_image_path,
-                    "caption": caption,
-                    "safe_label": safe_label,
-                    **{
-                        key: str(row[key])
-                        for key in ("violation_rules", "violations_json")
-                        if key in row and str(row[key]).strip()
-                    },
-                }
+                ids.append(item_id)
+                captions.append(caption)
+                metadatas.append(
+                    {
+                        "image_path": stored_image_path,
+                        "caption": caption,
+                        "safe_label": safe_label,
+                        **{
+                            key: str(row[key])
+                            for key in ("violation_rules", "violations_json")
+                            if key in row and str(row[key]).strip()
+                        },
+                    }
+                )
+
+            caption_embeddings = encode_documents(captions)
+            image_embeddings = encode_images(images)
+            caption_collection.upsert(
+                ids=ids,
+                embeddings=caption_embeddings,
+                documents=captions,
+                metadatas=metadatas,
             )
-
-        caption_embeddings = encode_documents(captions)
-        image_embeddings = encode_images(images)
-        caption_collection.upsert(
-            ids=ids,
-            embeddings=caption_embeddings,
-            documents=captions,
-            metadatas=metadatas,
-        )
-        image_collection.upsert(
-            ids=ids,
-            embeddings=image_embeddings,
-            documents=captions,
-            metadatas=metadatas,
-        )
+            image_collection.upsert(
+                ids=ids,
+                embeddings=image_embeddings,
+                documents=captions,
+                metadatas=metadatas,
+            )
+            elapsed = time.time() - start_time
+            pbar.set_description(f"Batch start={start} | elapsed={elapsed:.2f}s")
+            pbar.update(1)
 
     print(f"Built both indexes with {len(dataframe)} items in {CHROMA_DIR}.")
 

@@ -12,7 +12,7 @@ IMAGE_COLLECTION = "siglip2_image_rag"
 
 # Complete local Hugging Face SigLIP2 snapshot.
 EMBED_MODEL_PATH = "/root/autodl-tmp/model/siglip2"
-EMBED_BATCH_SIZE = 32
+EMBED_BATCH_SIZE = 128
 EMBED_DEVICE = "auto"
 RESET_COLLECTIONS_ON_BUILD = True
 
