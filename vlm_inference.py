@@ -16,6 +16,7 @@ from config import (
     VLM_MAX_NEW_TOKENS,
     VLM_MODEL_PATH,
     VLM_PROCESSOR_PATH,
+    VLM_USE_FLASH_ATTENTION,
 )
 from retriever import save_retrieved_images, copy_image_to_demo
 
@@ -50,10 +51,16 @@ def _vlm_components() -> tuple[Any, Any, Any, Any]:
     from qwen_vl_utils import process_vision_info
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
+    model_kwargs = {
+        "torch_dtype": "auto",
+        "device_map": "auto",
+    }
+    if VLM_USE_FLASH_ATTENTION:
+        model_kwargs["attn_implementation"] = "flash_attention_2"
+
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         VLM_MODEL_PATH,
-        torch_dtype="auto",
-        device_map="auto",
+        **model_kwargs,
     )
     processor = AutoProcessor.from_pretrained(VLM_PROCESSOR_PATH)
     return model, processor, process_vision_info, torch
