@@ -48,7 +48,7 @@ Verify SigLIP2 can load and encode a text query:
 
 ```bash
 python -c "from embedding import resolve_model_path; print(resolve_model_path())"
-python -c "from embedding import get_embedding_model, get_embedding_processor; print(type(get_embedding_model()), type(get_embedding_processor()))"
+python -c "from embedding import get_embedding_model, get_embedding_image_processor, get_embedding_tokenizer; print(type(get_embedding_model()), type(get_embedding_image_processor()), type(get_embedding_tokenizer()))"
 python -c "from embedding import encode_query; print(len(encode_query('worker wearing a safety helmet')))"
 ```
 
