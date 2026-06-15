@@ -31,4 +31,4 @@ VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = True
 
-SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2"
+SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2/sentence-transformers/all-MiniLM-L6-v2"
