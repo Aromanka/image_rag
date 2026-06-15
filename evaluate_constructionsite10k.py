@@ -14,12 +14,10 @@ from config import (
     CONSTRUCTIONSITE10K_TASK,
     DEFAULT_CONSTRUCTIONSITE10K_QUERY,
     PROJECT_ROOT,
+    SBERT_MODEL_PATH,
     TOP_K,
 )
 from utils.evaluate_utils import evaluate_constructionsite10k_results_json
-
-
-DEFAULT_SBERT_PATH = "/root/autodl-tmp/all-MiniLM-L6-v2"
 
 
 def _message_by_role(sample: dict[str, Any], role: str) -> dict[str, Any] | None:
@@ -260,10 +258,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sbert-path",
         type=Path,
-        default=Path(DEFAULT_SBERT_PATH),
+        default=Path(SBERT_MODEL_PATH),
         help=(
             "SentenceTransformer path for annotation similarity metrics. "
-            "Defaults to the path used by new_qwen25vl_eval_finetuned.py."
+            "Defaults to SBERT_MODEL_PATH in config.py."
         ),
     )
     parser.add_argument(
