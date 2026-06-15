@@ -19,6 +19,9 @@ from config import (
 from utils.evaluate_utils import evaluate_constructionsite10k_results_json
 
 
+DEFAULT_SBERT_PATH = "/root/autodl-tmp/all-MiniLM-L6-v2"
+
+
 def _message_by_role(sample: dict[str, Any], role: str) -> dict[str, Any] | None:
     for message in sample.get("messages", []):
         if message.get("role") == role:
@@ -100,6 +103,8 @@ def run_evaluation(
     limit: int | None,
     offset: int,
     image_root: Path | None,
+    sbert_path: str | Path | None,
+    skip_annotation_metrics: bool,
 ) -> None:
     from vlm_inference import VLM_inference, VLM_inference_with_RAG
 
@@ -187,7 +192,12 @@ def run_evaluation(
 
     out_name = f"save/eval_results_constructionsite10k_{mode}_{int(time.time())}.json"
     out_path = PROJECT_ROOT / out_name
-    evaluated_payload = evaluate_constructionsite10k_results_json(payload, out_path)
+    evaluated_payload = evaluate_constructionsite10k_results_json(
+        payload,
+        out_path,
+        compute_annotation_metrics=not skip_annotation_metrics,
+        sbert_path=sbert_path,
+    )
     summary = evaluated_payload["summary"]
 
     print("-" * 60)
@@ -205,6 +215,18 @@ def run_evaluation(
     print(f"Micro Precision:    {summary['micro_precision']:.4f}")
     print(f"Micro Recall:       {summary['micro_recall']:.4f}")
     print(f"Micro F1:           {summary['micro_f1']:.4f}")
+    print(f"Avg ROUGE-L:        {summary['avg_rouge_l']:.4f}")
+    print(f"Avg SBERT sim:      {summary['avg_sbert_sim']:.4f}")
+    print("-" * 60)
+    print(f"{'Rule':<8} {'Precision':>10} {'Recall':>10} {'F1':>10} {'TP':>6} {'FP':>6} {'FN':>6}")
+    print("-" * 60)
+    for rule in [1, 2, 3, 4]:
+        metrics = evaluated_payload["per_rule"][str(rule)]
+        print(
+            f"Rule {rule:<3} {metrics['precision']:>10.4f} "
+            f"{metrics['recall']:>10.4f} {metrics['f1']:>10.4f} "
+            f"{metrics['tp']:>6} {metrics['fp']:>6} {metrics['fn']:>6}"
+        )
     print(f"Time elapsed:       {elapsed:.1f}s")
     print(f"Results saved:      {out_path}")
 
@@ -235,6 +257,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument(
+        "--sbert-path",
+        type=Path,
+        default=Path(DEFAULT_SBERT_PATH),
+        help=(
+            "SentenceTransformer path for annotation similarity metrics. "
+            "Defaults to the path used by new_qwen25vl_eval_finetuned.py."
+        ),
+    )
+    parser.add_argument(
+        "--skip-annotation-metrics",
+        action="store_true",
+        help="Skip ROUGE-L and SBERT annotation similarity metrics.",
+    )
     return parser.parse_args()
 
 
@@ -248,4 +284,6 @@ if __name__ == "__main__":
         limit=args.limit,
         offset=args.offset,
         image_root=args.image_root,
+        sbert_path=args.sbert_path,
+        skip_annotation_metrics=args.skip_annotation_metrics,
     )

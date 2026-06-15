@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_CONSTRUCTIONSITE10K_SBERT_PATH = "/root/autodl-tmp/all-MiniLM-L6-v2"
+
+
 def extract_label(output: str | None) -> str | None:
     """Extract safe/unsafe label from VLM output text."""
     if not output:
@@ -130,28 +133,28 @@ def evaluate_results_json(
 
 
 def parse_constructionsite10k_output(text: str | None) -> tuple[dict[str, Any], bool]:
-    """Parse a ConstructionSite-10K JSON response from model text."""
+    """Parse a ConstructionSite-10K JSON response from model text.
+
+    This intentionally mirrors ``constructionsite_10k/evaluate_utils.py`` so
+    saved Image_RAG outputs are scored with the same semantics as the
+    fine-tuned-model evaluation scripts.
+    """
     if not text:
         return {"annotation": "", "violations": []}, False
 
-    stripped = text.strip()
     try:
-        parsed = json.loads(stripped)
+        parsed = json.loads(text.strip())
         if isinstance(parsed, dict) and "violations" in parsed:
             return parsed, True
-    except json.JSONDecodeError:
-        pass
-
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(stripped):
-        if char != "{":
-            continue
-        try:
-            parsed, _ = decoder.raw_decode(stripped[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict) and "violations" in parsed:
-            return parsed, True
+    except Exception:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, dict) and "violations" in parsed:
+                    return parsed, True
+            except Exception:
+                pass
 
     return {"annotation": "", "violations": []}, False
 
@@ -168,14 +171,37 @@ def get_violation_rules(violations: Any) -> set[int]:
             rule = int(violation.get("rule"))
         except (TypeError, ValueError):
             continue
-        if 1 <= rule <= 4:
-            rules.add(rule)
+        rules.add(rule)
     return rules
+
+
+def _load_annotation_scorers(sbert_path: str | Path | None) -> tuple[Any, Any, Any]:
+    """Load ROUGE-L and SBERT scorers used by the ConstructionSite-10K scripts."""
+    try:
+        from rouge_score import rouge_scorer
+        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import util as st_util
+    except ImportError as exc:
+        raise ImportError(
+            "ConstructionSite-10K annotation metrics require 'rouge-score' and "
+            "'sentence-transformers'. Install them or pass "
+            "compute_annotation_metrics=False."
+        ) from exc
+
+    if not sbert_path:
+        raise ValueError("sbert_path is required when computing SBERT similarity.")
+
+    rouge = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    sbert = SentenceTransformer(str(sbert_path))
+    return rouge, sbert, st_util
 
 
 def evaluate_constructionsite10k_results_json(
     results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
     output_json: str | Path | None = None,
+    *,
+    compute_annotation_metrics: bool = False,
+    sbert_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Evaluate saved ConstructionSite-10K inference results."""
     source_path: Path | None = None
@@ -203,6 +229,11 @@ def evaluate_constructionsite10k_results_json(
     fn = {rule: 0 for rule in all_rules}
     parse_failures = 0
     valid_results: list[dict[str, Any]] = []
+    rouge_scores: list[float] = []
+    sbert_scores: list[float] = []
+    rouge = sbert = st_util = None
+    if compute_annotation_metrics:
+        rouge, sbert, st_util = _load_annotation_scorers(sbert_path)
 
     for sample in results:
         if not isinstance(sample, dict):
@@ -221,6 +252,9 @@ def evaluate_constructionsite10k_results_json(
         if sample.get("error"):
             sample["pred_annotation"] = ""
             sample["pred_rules"] = []
+            if compute_annotation_metrics:
+                sample["rouge_l"] = 0.0
+                sample["sbert_sim"] = 0.0
             sample["parse_failed"] = True
             sample["status"] = "ERROR"
             parse_failures += 1
@@ -234,6 +268,9 @@ def evaluate_constructionsite10k_results_json(
         sample["parse_failed"] = not parse_ok
 
         if not parse_ok:
+            if compute_annotation_metrics:
+                sample["rouge_l"] = 0.0
+                sample["sbert_sim"] = 0.0
             sample["status"] = "PARSE_FAIL"
             parse_failures += 1
             continue
@@ -247,6 +284,19 @@ def evaluate_constructionsite10k_results_json(
                 fp[rule] += 1
             elif not pred_pos and gt_pos:
                 fn[rule] += 1
+
+        if compute_annotation_metrics:
+            gt_annotation = str(gt_json.get("annotation", ""))
+            pred_annotation = str(pred_json.get("annotation", ""))
+            rouge_l = rouge.score(gt_annotation, pred_annotation)["rougeL"].fmeasure
+            rouge_scores.append(rouge_l)
+            sbert_sim = st_util.cos_sim(
+                sbert.encode(pred_annotation, convert_to_tensor=True),
+                sbert.encode(gt_annotation, convert_to_tensor=True),
+            ).item()
+            sbert_scores.append(sbert_sim)
+            sample["rouge_l"] = rouge_l
+            sample["sbert_sim"] = sbert_sim
 
         sample["status"] = "CORRECT" if pred_rules == gt_rules else "WRONG"
         valid_results.append(sample)
@@ -304,8 +354,11 @@ def evaluate_constructionsite10k_results_json(
         "micro_precision": micro_precision,
         "micro_recall": micro_recall,
         "micro_f1": micro_f1,
+        "avg_rouge_l": sum(rouge_scores) / len(rouge_scores) if rouge_scores else 0.0,
+        "avg_sbert_sim": sum(sbert_scores) / len(sbert_scores) if sbert_scores else 0.0,
     }
     data["per_rule"] = per_rule
+    data["details"] = results
 
     if output_json is not None:
         target_path = Path(output_json)
@@ -335,6 +388,20 @@ def _parse_args() -> argparse.Namespace:
         default="auto",
         help="Evaluation metric type for the saved JSON.",
     )
+    parser.add_argument(
+        "--sbert-path",
+        type=Path,
+        default=Path(DEFAULT_CONSTRUCTIONSITE10K_SBERT_PATH),
+        help=(
+            "SentenceTransformer path for ConstructionSite-10K annotation "
+            "similarity metrics."
+        ),
+    )
+    parser.add_argument(
+        "--skip-annotation-metrics",
+        action="store_true",
+        help="Skip ROUGE-L and SBERT metrics for ConstructionSite-10K.",
+    )
     return parser.parse_args()
 
 
@@ -360,6 +427,8 @@ if __name__ == "__main__":
         evaluated = evaluate_constructionsite10k_results_json(
             args.results_json,
             args.output_json,
+            compute_annotation_metrics=not args.skip_annotation_metrics,
+            sbert_path=args.sbert_path,
         )
         summary = evaluated["summary"]
         print(f"Total samples:  {summary['total_samples']}")
@@ -373,6 +442,8 @@ if __name__ == "__main__":
         print(f"Micro Precision:{summary['micro_precision']:.4f}")
         print(f"Micro Recall:   {summary['micro_recall']:.4f}")
         print(f"Micro F1:       {summary['micro_f1']:.4f}")
+        print(f"Avg ROUGE-L:    {summary['avg_rouge_l']:.4f}")
+        print(f"Avg SBERT sim:  {summary['avg_sbert_sim']:.4f}")
     else:
         evaluated = evaluate_results_json(args.results_json, args.output_json)
         summary = evaluated["summary"]
