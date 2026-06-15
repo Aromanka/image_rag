@@ -36,4 +36,4 @@ if __name__ == "__main__":
 
     balance_csv(args.input_csv, args.output_csv, args.ratio, args.seed)
 
-# python balance_csv.py data/inspecsafe/test.csv data/inspecsafe/test_balanced.csv
+# python preprocess/balance_inspecsafe.py data/inspecsafe/test.csv data/inspecsafe/test_balanced.csv
