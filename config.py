@@ -30,4 +30,4 @@ VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
 
-SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2"
+SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2/sentence-transformers/all-MiniLM-L6-v2"
