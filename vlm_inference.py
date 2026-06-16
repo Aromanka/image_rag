@@ -197,6 +197,16 @@ def _model_input_device(model: Any, torch: Any) -> Any:
         return "cpu"
 
 
+def _model_input_dtype(model: Any, torch: Any) -> Any:
+    try:
+        dtype = next(model.parameters()).dtype
+        if getattr(dtype, "is_floating_point", False):
+            return dtype
+    except StopIteration:
+        pass
+    return torch.float32
+
+
 def _build_single_image_messages(
     query_image: str | Path,
     prompt: str,
@@ -405,7 +415,7 @@ def _run_internvl_messages(
     pixel_values = None
     num_patches_list = None
     if images:
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        dtype = _model_input_dtype(model, torch)
         pixel_values = torch.cat(
             [transform(image).unsqueeze(0).to(dtype) for image in images],
             dim=0,
