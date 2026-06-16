@@ -2,6 +2,9 @@
 
 import argparse
 import json
+import os
+import sys
+import types
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -89,6 +92,23 @@ def _build_internvl_transform() -> Any:
     ])
 
 
+def _prepare_internvl_optional_imports() -> None:
+    """Avoid broken optional logging imports pulled in by InternVL/timm."""
+    os.environ.setdefault("WANDB_DISABLED", "true")
+    existing_wandb = sys.modules.get("wandb")
+    if existing_wandb is not None and all(
+        hasattr(existing_wandb, attr) for attr in ("init", "log", "finish")
+    ):
+        return
+
+    wandb_stub = types.ModuleType("wandb")
+    wandb_stub.run = None
+    wandb_stub.init = lambda *args, **kwargs: None
+    wandb_stub.log = lambda *args, **kwargs: None
+    wandb_stub.finish = lambda *args, **kwargs: None
+    sys.modules["wandb"] = wandb_stub
+
+
 @lru_cache(maxsize=1)
 def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
     import torch
@@ -119,11 +139,13 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
         return model, processor, backend, None, torch
 
     if backend == INTERNVL_BACKEND:
+        _prepare_internvl_optional_imports()
+
         from transformers import AutoModel, AutoTokenizer
 
         model_kwargs = {
             "device_map": "auto",
-            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
             "trust_remote_code": True,
         }
         if VLM_USE_FLASH_ATTENTION:
