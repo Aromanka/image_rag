@@ -145,7 +145,7 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
 
         model_kwargs = {
             "device_map": "auto",
-            "dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "torch_dtype": torch.bfloat16,
             "trust_remote_code": True,
         }
         if VLM_USE_FLASH_ATTENTION:
