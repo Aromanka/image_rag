@@ -4,9 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from config import PROJECT_ROOT, TOP_K
-from retriever import hybrid_search
-
-
 CONSTRUCTIONSITE10K_SYSTEM_PROMPT = """You are a professional construction site safety inspector with expertise in hazard identification and regulatory compliance.
 
 Carefully analyze the provided construction site image and assess safety compliance step by step.
@@ -209,6 +206,8 @@ def build_constructionsite10k_rag_messages(
 
 
 def answer(query: str, top_k: int = TOP_K) -> dict[str, Any]:
+    from retriever import hybrid_search
+
     retrieved = hybrid_search(query, top_k)
     return {
         "query": query,

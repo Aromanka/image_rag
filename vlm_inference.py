@@ -1,4 +1,4 @@
-"""Qwen2.5-VL inference entry points with optional image RAG context."""
+"""VLM inference entry points with optional image RAG context."""
 
 import argparse
 import json
@@ -18,7 +18,10 @@ from config import (
     VLM_PROCESSOR_PATH,
     VLM_USE_FLASH_ATTENTION,
 )
-from retriever import save_retrieved_images, copy_image_to_demo
+
+
+QWEN25VL_BACKEND = "qwen2_5_vl"
+GEMMA3_BACKEND = "gemma3"
 
 
 def _validate_task_type(task_type: str) -> str:
@@ -45,11 +48,53 @@ def _resolve_query_image_path(query_image: str | Path) -> Path:
     return path
 
 
+def _resolve_image_path(image_path: str | Path) -> Path:
+    path = Path(image_path).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    if not path.is_file():
+        raise FileNotFoundError(f"Image not found: {path}")
+    return path
+
+
+def _infer_vlm_backend() -> str:
+    model_hint = f"{VLM_MODEL_PATH} {VLM_PROCESSOR_PATH}".lower()
+    if "gemma" in model_hint:
+        return GEMMA3_BACKEND
+    return QWEN25VL_BACKEND
+
+
 @lru_cache(maxsize=1)
-def _vlm_components() -> tuple[Any, Any, Any, Any]:
+def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
     import torch
+    from transformers import AutoProcessor
+
+    backend = _infer_vlm_backend()
+
+    if backend == GEMMA3_BACKEND:
+        from transformers import Gemma3ForConditionalGeneration
+
+        model_kwargs = {
+            "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            "device_map": "auto",
+            "trust_remote_code": True,
+        }
+        if VLM_USE_FLASH_ATTENTION:
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+
+        model = Gemma3ForConditionalGeneration.from_pretrained(
+            VLM_MODEL_PATH,
+            **model_kwargs,
+        )
+        processor = AutoProcessor.from_pretrained(
+            VLM_PROCESSOR_PATH,
+            trust_remote_code=True,
+        )
+        model.eval()
+        return model, processor, backend, None, torch
+
     from qwen_vl_utils import process_vision_info
-    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+    from transformers import Qwen2_5_VLForConditionalGeneration
 
     model_kwargs = {
         "torch_dtype": "auto",
@@ -63,7 +108,8 @@ def _vlm_components() -> tuple[Any, Any, Any, Any]:
         **model_kwargs,
     )
     processor = AutoProcessor.from_pretrained(VLM_PROCESSOR_PATH)
-    return model, processor, process_vision_info, torch
+    model.eval()
+    return model, processor, backend, process_vision_info, torch
 
 
 def _model_input_device(model: Any, torch: Any) -> Any:
@@ -75,14 +121,12 @@ def _model_input_device(model: Any, torch: Any) -> Any:
         return "cpu"
 
 
-def _run_vlm(
+def _build_single_image_messages(
     query_image: str | Path,
     prompt: str,
-    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
-) -> str:
+) -> list[dict[str, Any]]:
     image_path = _resolve_query_image_path(query_image)
-    model, processor, process_vision_info, torch = _vlm_components()
-    messages = [
+    return [
         {
             "role": "user",
             "content": [
@@ -91,6 +135,49 @@ def _run_vlm(
             ],
         }
     ]
+
+
+def _prepare_gemma3_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[Any]]:
+    gemma_messages: list[dict[str, Any]] = []
+    images: list[Any] = []
+
+    for message in messages:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        if isinstance(content, str):
+            gemma_messages.append({
+                "role": role,
+                "content": [{"type": "text", "text": content}],
+            })
+            continue
+
+        gemma_content: list[dict[str, Any]] = []
+        for item in content:
+            item_type = item.get("type")
+            if item_type == "image":
+                from PIL import Image
+
+                image = Image.open(_resolve_image_path(item["image"])).convert("RGB")
+                images.append(image)
+                gemma_content.append({"type": "image", "image": image})
+            elif item_type == "text":
+                gemma_content.append({
+                    "type": "text",
+                    "text": str(item.get("text", "")),
+                })
+
+        gemma_messages.append({"role": role, "content": gemma_content})
+
+    return gemma_messages, images
+
+
+def _run_qwen25vl_messages(
+    messages: list[dict[str, Any]],
+    max_new_tokens: int,
+) -> str:
+    model, processor, _, process_vision_info, torch = _vlm_components()
 
     text = processor.apply_chat_template(
         messages,
@@ -108,7 +195,11 @@ def _run_vlm(
     inputs = inputs.to(_model_input_device(model, torch))
 
     with torch.inference_mode():
-        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
 
     generated_ids_trimmed = [
         out_ids[len(in_ids) :]
@@ -122,41 +213,63 @@ def _run_vlm(
     return output_text[0] if output_text else ""
 
 
-def _run_vlm_messages(
+def _run_gemma3_messages(
     messages: list[dict[str, Any]],
-    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+    max_new_tokens: int,
 ) -> str:
-    """Run Qwen2.5-VL with a pre-built messages list (multi-image support)."""
-    model, processor, process_vision_info, torch = _vlm_components()
-
-    text = processor.apply_chat_template(
-        messages,
-        tokenize=False,
+    model, processor, _, _, torch = _vlm_components()
+    gemma_messages, images = _prepare_gemma3_messages(messages)
+    prompt_text = processor.apply_chat_template(
+        gemma_messages,
         add_generation_prompt=True,
+        tokenize=False,
     )
-    image_inputs, video_inputs = process_vision_info(messages)
     inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
+        text=[prompt_text],
+        images=[images] if images else None,
         padding=True,
         return_tensors="pt",
     )
     inputs = inputs.to(_model_input_device(model, torch))
 
+    generation_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+        "top_p": None,
+        "top_k": None,
+    }
     with torch.inference_mode():
-        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        if torch.cuda.is_available():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                generated_ids = model.generate(**inputs, **generation_kwargs)
+        else:
+            generated_ids = model.generate(**inputs, **generation_kwargs)
 
-    generated_ids_trimmed = [
-        out_ids[len(in_ids):]
-        for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-    ]
-    output_text = processor.batch_decode(
-        generated_ids_trimmed,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
+    input_len = int(inputs["attention_mask"][0].sum().item())
+    generated = generated_ids[0][input_len:]
+    return processor.decode(generated, skip_special_tokens=True).strip()
+
+
+def _run_vlm(
+    query_image: str | Path,
+    prompt: str,
+    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+) -> str:
+    return _run_vlm_messages(
+        _build_single_image_messages(query_image, prompt),
+        max_new_tokens=max_new_tokens,
     )
-    return output_text[0] if output_text else ""
+
+
+def _run_vlm_messages(
+    messages: list[dict[str, Any]],
+    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+) -> str:
+    """Run the configured VLM with a pre-built messages list."""
+    _, _, backend, _, _ = _vlm_components()
+    if backend == GEMMA3_BACKEND:
+        return _run_gemma3_messages(messages, max_new_tokens=max_new_tokens)
+    return _run_qwen25vl_messages(messages, max_new_tokens=max_new_tokens)
 
 
 def build_baseline_prompt(task_type: str, query: str | None = None) -> str:
@@ -192,7 +305,7 @@ def VLM_inference(
     query: str | None = None,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
 ) -> dict[str, Any]:
-    """Run baseline Qwen2.5-VL inference without retrieval context."""
+    """Run baseline VLM inference without retrieval context."""
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
     prompt = build_baseline_prompt(task_type, query)
@@ -215,7 +328,7 @@ def VLM_inference_with_RAG(
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
     debug_mode: bool = False
 ) -> dict[str, Any]:
-    """Retrieve similar examples, build a RAG prompt, and run Qwen2.5-VL."""
+    """Retrieve similar examples, build a RAG prompt, and run the configured VLM."""
     from rag_answer import build_constructionsite10k_rag_messages, build_rag_messages
     from retriever import search_by_query_image
 
@@ -224,6 +337,8 @@ def VLM_inference_with_RAG(
     image_path = _resolve_query_image_path(query_image)
     retrieved = search_by_query_image(query_image, top_k=top_k)
     if debug_mode:
+        from retriever import copy_image_to_demo, save_retrieved_images
+
         print(f"images saved for debug_mode")
         save_retrieved_images(retrieved)
         copy_image_to_demo(image_path, "query_image.png")
@@ -243,7 +358,7 @@ def VLM_inference_with_RAG(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Qwen2.5-VL safety inference.")
+    parser = argparse.ArgumentParser(description="Run VLM safety inference.")
     parser.add_argument(
         "--dataset-csv",
         type=Path,

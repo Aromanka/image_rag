@@ -26,9 +26,11 @@ SUPPORTED_TASK_TYPES = {SAFETY_JUDGEMENT_TASK, CONSTRUCTIONSITE10K_TASK}
 DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
 DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 
-VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
+# VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
+VLM_MODEL_PATH = "/root/autodl-tmp/model/gemma3_4b"
+
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
-VLM_USE_FLASH_ATTENTION = True
+VLM_USE_FLASH_ATTENTION = False
 
 SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2/sentence-transformers/all-MiniLM-L6-v2"
