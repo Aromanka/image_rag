@@ -22,6 +22,11 @@ from config import (
 
 QWEN25VL_BACKEND = "qwen2_5_vl"
 GEMMA3_BACKEND = "gemma3"
+INTERNVL_BACKEND = "internvl"
+INTERNVL_IMG_SIZE = 448
+INTERNVL_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+INTERNVL_IMAGENET_STD = (0.229, 0.224, 0.225)
+INTERNVL_IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
 
 
 def _validate_task_type(task_type: str) -> str:
@@ -61,17 +66,37 @@ def _infer_vlm_backend() -> str:
     model_hint = f"{VLM_MODEL_PATH} {VLM_PROCESSOR_PATH}".lower()
     if "gemma" in model_hint:
         return GEMMA3_BACKEND
+    if "internvl" in model_hint:
+        return INTERNVL_BACKEND
     return QWEN25VL_BACKEND
+
+
+def _build_internvl_transform() -> Any:
+    import torchvision.transforms as transforms
+    from torchvision.transforms.functional import InterpolationMode
+
+    return transforms.Compose([
+        transforms.Lambda(lambda image: image.convert("RGB")),
+        transforms.Resize(
+            (INTERNVL_IMG_SIZE, INTERNVL_IMG_SIZE),
+            interpolation=InterpolationMode.BICUBIC,
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=INTERNVL_IMAGENET_MEAN,
+            std=INTERNVL_IMAGENET_STD,
+        ),
+    ])
 
 
 @lru_cache(maxsize=1)
 def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
     import torch
-    from transformers import AutoProcessor
 
     backend = _infer_vlm_backend()
 
     if backend == GEMMA3_BACKEND:
+        from transformers import AutoProcessor
         from transformers import Gemma3ForConditionalGeneration
 
         model_kwargs = {
@@ -93,7 +118,36 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
         model.eval()
         return model, processor, backend, None, torch
 
+    if backend == INTERNVL_BACKEND:
+        from transformers import AutoModel, AutoTokenizer
+
+        model_kwargs = {
+            "device_map": "auto",
+            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "trust_remote_code": True,
+        }
+        if VLM_USE_FLASH_ATTENTION:
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            VLM_PROCESSOR_PATH,
+            trust_remote_code=True,
+            use_fast=False,
+        )
+        model = AutoModel.from_pretrained(
+            VLM_MODEL_PATH,
+            **model_kwargs,
+        )
+        img_context_token_id = tokenizer.convert_tokens_to_ids(
+            INTERNVL_IMG_CONTEXT_TOKEN
+        )
+        if img_context_token_id is not None:
+            model.img_context_token_id = img_context_token_id
+        model.eval()
+        return model, tokenizer, backend, _build_internvl_transform(), torch
+
     from qwen_vl_utils import process_vision_info
+    from transformers import AutoProcessor
     from transformers import Qwen2_5_VLForConditionalGeneration
 
     model_kwargs = {
@@ -173,6 +227,69 @@ def _prepare_gemma3_messages(
     return gemma_messages, images
 
 
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+
+    text_parts = [
+        str(item.get("text", "")).strip()
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text"
+    ]
+    return "\n".join(part for part in text_parts if part)
+
+
+def _prepare_internvl_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[str, list[Any]]:
+    system_parts: list[str] = []
+    user_parts: list[str] = []
+    images: list[Any] = []
+
+    for message in messages:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+
+        if role == "system":
+            text = _message_text(content)
+            if text:
+                system_parts.append(text)
+            continue
+
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                user_parts.append(text)
+            continue
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "image":
+                from PIL import Image
+
+                images.append(
+                    Image.open(_resolve_image_path(item["image"])).convert("RGB")
+                )
+                if len(images) == 1:
+                    user_parts.append("<image>")
+                else:
+                    user_parts.append(f"Image {len(images)}: <image>")
+            elif item_type == "text":
+                text = str(item.get("text", "")).strip()
+                if text:
+                    user_parts.append(text)
+
+    system_text = "\n\n".join(system_parts).strip()
+    user_text = "\n".join(user_parts).strip()
+    if system_text and user_text:
+        return f"{system_text}\n\n{user_text}", images
+    return system_text or user_text, images
+
+
 def _run_qwen25vl_messages(
     messages: list[dict[str, Any]],
     max_new_tokens: int,
@@ -250,6 +367,42 @@ def _run_gemma3_messages(
     return processor.decode(generated, skip_special_tokens=True).strip()
 
 
+def _run_internvl_messages(
+    messages: list[dict[str, Any]],
+    max_new_tokens: int,
+) -> str:
+    model, tokenizer, _, transform, torch = _vlm_components()
+    question, images = _prepare_internvl_messages(messages)
+
+    generation_config = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+    }
+    device = _model_input_device(model, torch)
+
+    pixel_values = None
+    num_patches_list = None
+    if images:
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        pixel_values = torch.cat(
+            [transform(image).unsqueeze(0).to(dtype) for image in images],
+            dim=0,
+        ).to(device)
+        num_patches_list = [1] * len(images)
+
+    chat_kwargs = {
+        "tokenizer": tokenizer,
+        "pixel_values": pixel_values,
+        "question": question,
+        "generation_config": generation_config,
+    }
+    if num_patches_list is not None:
+        chat_kwargs["num_patches_list"] = num_patches_list
+
+    with torch.inference_mode():
+        return model.chat(**chat_kwargs).strip()
+
+
 def _run_vlm(
     query_image: str | Path,
     prompt: str,
@@ -269,6 +422,8 @@ def _run_vlm_messages(
     _, _, backend, _, _ = _vlm_components()
     if backend == GEMMA3_BACKEND:
         return _run_gemma3_messages(messages, max_new_tokens=max_new_tokens)
+    if backend == INTERNVL_BACKEND:
+        return _run_internvl_messages(messages, max_new_tokens=max_new_tokens)
     return _run_qwen25vl_messages(messages, max_new_tokens=max_new_tokens)
 
 
