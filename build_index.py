@@ -69,7 +69,16 @@ def _message_content(sample: dict[str, Any], role: str) -> str:
     for message in sample.get("messages", []):
         if message.get("role") == role:
             content = message.get("content", "")
-            return content if isinstance(content, str) else ""
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "\n".join(
+                    str(item.get("text", "")).strip()
+                    for item in content
+                    if isinstance(item, dict)
+                    and item.get("type") == "text"
+                    and str(item.get("text", "")).strip()
+                )
     return ""
 
 
@@ -110,6 +119,64 @@ def load_constructionsite10k_dataset(dataset_json: Path) -> pd.DataFrame:
                     ensure_ascii=False,
                     default=str,
                 ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def load_labsafety_dataset(dataset_json: Path) -> pd.DataFrame:
+    """Load Lab Safety JSON into the index CSV schema."""
+    if not dataset_json.is_file():
+        raise FileNotFoundError(f"Dataset not found: {dataset_json}")
+
+    with dataset_json.open("r", encoding="utf-8") as file:
+        samples = json.load(file)
+    if not isinstance(samples, list) or not samples:
+        raise ValueError("Lab Safety JSON must contain a non-empty list.")
+
+    rows: list[dict[str, str]] = []
+    image_root = dataset_json.parent
+    for index, sample in enumerate(samples):
+        raw_image = str(sample.get("image", "")).replace("\\", "/")
+        image_path = image_root / raw_image
+        metadata = sample.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        question = _message_content(sample, "user")
+        assistant_answer = _message_content(sample, "assistant")
+        answer = str(metadata.get("answer") or assistant_answer).strip().upper()
+        explanation = str(metadata.get("explanation", "")).strip()
+        category = metadata.get("category", [])
+        if isinstance(category, list):
+            category_text = ", ".join(str(item) for item in category)
+        else:
+            category_text = str(category)
+        level = str(metadata.get("level", "")).strip()
+
+        caption_parts = [
+            f"Question: {question}",
+            f"Correct answer: {answer}",
+        ]
+        if explanation:
+            caption_parts.append(f"Explanation: {explanation}")
+        if category_text:
+            caption_parts.append(f"Category: {category_text}")
+        if level:
+            caption_parts.append(f"Level: {level}")
+
+        rows.append(
+            {
+                "id": f"{Path(raw_image).stem}_{index:06d}",
+                "image_path": str(image_path),
+                "caption": "\n".join(caption_parts),
+                "safe_label": answer,
+                "question": question,
+                "answer": answer,
+                "explanation": explanation,
+                "category": category_text,
+                "level": level,
             }
         )
 
@@ -191,7 +258,15 @@ def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
                         "safe_label": safe_label,
                         **{
                             key: str(row[key])
-                            for key in ("violation_rules", "violations_json")
+                            for key in (
+                                "violation_rules",
+                                "violations_json",
+                                "question",
+                                "answer",
+                                "explanation",
+                                "category",
+                                "level",
+                            )
                             if key in row and str(row[key]).strip()
                         },
                     }
@@ -226,6 +301,10 @@ def build_constructionsite10k_indexes(dataset_json: Path) -> None:
     build_indexes_from_dataframe(load_constructionsite10k_dataset(dataset_json))
 
 
+def build_labsafety_indexes(dataset_json: Path) -> None:
+    build_indexes_from_dataframe(load_labsafety_dataset(dataset_json))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build caption and image indexes from a CSV or ConstructionSite-10K JSON."
@@ -242,6 +321,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to ConstructionSite-10K train.json.",
     )
+    source.add_argument(
+        "--lab-safety-json",
+        type=Path,
+        help="Path to Lab Safety train JSON.",
+    )
     return parser.parse_args()
 
 
@@ -249,5 +333,7 @@ if __name__ == "__main__":
     args = parse_args()
     if args.constructionsite_json:
         build_constructionsite10k_indexes(args.constructionsite_json)
+    elif args.lab_safety_json:
+        build_labsafety_indexes(args.lab_safety_json)
     else:
         build_indexes(args.dataset_csv)

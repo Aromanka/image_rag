@@ -38,6 +38,7 @@ class ImagePathRequest(BaseModel):
 
 class VLMInferenceRequest(ImagePathRequest):
     task_type: str = "safety judgement"
+    query: str | None = None
     max_new_tokens: int = Field(default=VLM_MAX_NEW_TOKENS, ge=1)
 
 
@@ -93,6 +94,7 @@ def vlm_inference(request: VLMInferenceRequest):
         return VLM_inference(
             request.task_type,
             request.query_image,
+            query=request.query,
             max_new_tokens=request.max_new_tokens,
         )
     except (ValueError, RuntimeError, OSError) as exc:
@@ -105,6 +107,7 @@ def vlm_rag_inference(request: VLMInferenceRequest):
         return VLM_inference_with_RAG(
             request.task_type,
             request.query_image,
+            query=request.query,
             top_k=request.top_k,
             max_new_tokens=request.max_new_tokens,
         )

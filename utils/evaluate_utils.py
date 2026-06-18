@@ -29,6 +29,27 @@ def extract_label(output: str | None) -> str | None:
     return None
 
 
+def extract_choice_label(output: str | None) -> str | None:
+    """Extract an A-D multiple-choice answer from VLM output text."""
+    if not output:
+        return None
+
+    text = output.strip().upper()
+    match = re.match(r"^\s*([ABCD])\b", text)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"\b(?:ANSWER|OPTION|FINAL)\s*(?:ANSWER)?\s*[:\-]?\s*([ABCD])\b", text)
+    if match:
+        return match.group(1)
+
+    matches = re.findall(r"\b([ABCD])\b", text)
+    if matches:
+        return matches[-1]
+
+    return None
+
+
 def evaluate_results_json(
     results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
     output_json: str | Path | None = None,
@@ -118,6 +139,104 @@ def evaluate_results_json(
         "tn": tn,
         "fn": fn,
     }
+
+    if output_json is not None:
+        target_path = Path(output_json)
+    else:
+        target_path = source_path
+
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2, ensure_ascii=False, default=str)
+
+    return data
+
+
+def evaluate_labsafety_results_json(
+    results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
+    output_json: str | Path | None = None,
+) -> dict[str, Any]:
+    """Evaluate saved Lab Safety multiple-choice inference results."""
+    source_path: Path | None = None
+    if isinstance(results_json, (str, Path)):
+        source_path = Path(results_json)
+        with source_path.open("r", encoding="utf-8") as file:
+            payload: dict[str, Any] | list[dict[str, Any]] = json.load(file)
+    else:
+        payload = results_json
+
+    if isinstance(payload, list):
+        data: dict[str, Any] = {"results": payload}
+    elif isinstance(payload, dict):
+        data = payload
+    else:
+        raise TypeError("results_json must be a path, dict, or list of dictionaries.")
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Results JSON must contain a 'results' list.")
+
+    labels = ["A", "B", "C", "D"]
+    confusion = {
+        truth: {pred: 0 for pred in [*labels, "PARSE_FAIL"]}
+        for truth in labels
+    }
+    total = len(results)
+    correct = 0
+    errors = 0
+    parse_failures = 0
+
+    for sample in results:
+        if not isinstance(sample, dict):
+            errors += 1
+            continue
+
+        ground_truth = str(
+            sample.get("ground_truth_answer") or sample.get("ground_truth") or ""
+        ).strip().upper()
+        sample["ground_truth_answer"] = ground_truth
+
+        if sample.get("error"):
+            sample["predicted"] = None
+            sample["status"] = "ERROR"
+            errors += 1
+            if ground_truth in confusion:
+                confusion[ground_truth]["PARSE_FAIL"] += 1
+            continue
+
+        if ground_truth not in labels:
+            sample["predicted"] = None
+            sample["status"] = "SKIP"
+            errors += 1
+            continue
+
+        predicted = extract_choice_label(sample.get("output"))
+        sample["predicted"] = predicted
+
+        if predicted is None:
+            sample["status"] = "PARSE_FAIL"
+            parse_failures += 1
+            errors += 1
+            confusion[ground_truth]["PARSE_FAIL"] += 1
+        elif predicted == ground_truth:
+            sample["status"] = "CORRECT"
+            correct += 1
+            confusion[ground_truth][predicted] += 1
+        else:
+            sample["status"] = "WRONG"
+            confusion[ground_truth][predicted] += 1
+
+    evaluated = total - errors
+    data["summary"] = {
+        "total": total,
+        "evaluated": evaluated,
+        "correct": correct,
+        "errors_or_skipped": errors,
+        "parse_failures": parse_failures,
+        "accuracy": correct / evaluated if evaluated > 0 else 0.0,
+    }
+    data["confusion"] = confusion
 
     if output_json is not None:
         target_path = Path(output_json)
@@ -384,7 +503,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-type",
-        choices=["auto", "inspecsafe", "constructionsite10k"],
+        choices=["auto", "inspecsafe", "constructionsite10k", "lab_safety"],
         default="auto",
         help="Evaluation metric type for the saved JSON.",
     )
@@ -411,8 +530,11 @@ def _detect_results_type(results_json: Path) -> str:
     results = payload.get("results", []) if isinstance(payload, dict) else payload
     if isinstance(results, list) and results:
         first = results[0]
-        if isinstance(first, dict) and "ground_truth_output" in first:
-            return "constructionsite10k"
+        if isinstance(first, dict):
+            if "ground_truth_answer" in first:
+                return "lab_safety"
+            if "ground_truth_output" in first:
+                return "constructionsite10k"
     return "inspecsafe"
 
 
@@ -444,6 +566,18 @@ if __name__ == "__main__":
         print(f"Micro F1:       {summary['micro_f1']:.4f}")
         print(f"Avg ROUGE-L:    {summary['avg_rouge_l']:.4f}")
         print(f"Avg SBERT sim:  {summary['avg_sbert_sim']:.4f}")
+    elif dataset_type == "lab_safety":
+        evaluated = evaluate_labsafety_results_json(args.results_json, args.output_json)
+        summary = evaluated["summary"]
+        print(f"Total samples:  {summary['total']}")
+        print(f"Evaluated:      {summary['evaluated']}")
+        print(f"Correct:        {summary['correct']}")
+        print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(f"Parse failures: {summary['parse_failures']}")
+        print(
+            "Accuracy:       "
+            f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+        )
     else:
         evaluated = evaluate_results_json(args.results_json, args.output_json)
         summary = evaluated["summary"]

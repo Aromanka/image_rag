@@ -13,10 +13,15 @@ from typing import Any
 try:
     from utils.evaluate_utils import (
         evaluate_constructionsite10k_results_json,
+        evaluate_labsafety_results_json,
         evaluate_results_json,
     )
 except ModuleNotFoundError:
-    from evaluate_utils import evaluate_constructionsite10k_results_json, evaluate_results_json
+    from evaluate_utils import (
+        evaluate_constructionsite10k_results_json,
+        evaluate_labsafety_results_json,
+        evaluate_results_json,
+    )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -88,8 +93,11 @@ def _detect_dataset_type(results_json: Path) -> str:
     results = payload.get("results", []) if isinstance(payload, dict) else payload
     if isinstance(results, list) and results:
         first = results[0]
-        if isinstance(first, dict) and "ground_truth_output" in first:
-            return "constructionsite10k"
+        if isinstance(first, dict):
+            if "ground_truth_answer" in first:
+                return "lab_safety"
+            if "ground_truth_output" in first:
+                return "constructionsite10k"
     return "inspecsafe"
 
 
@@ -128,14 +136,18 @@ def export_sample_details(
                 sample_dir / f"retrieved_{index:02d}{suffix}",
             )
 
-        # ['id', 'input_image_path', 'ground_truth_output', 'prompt', 'output', 'gt_annotation', 'gt_rules', 'pred_annotation', 'pred_rules', 'parse_failed', 'status'] constructionsite
         prompt_path = sample_dir / "prompt.txt"
         prompt_path.write_text(_prompt_to_text(sample.get("prompt")), encoding="utf-8")
         response_path = sample_dir / "response.txt"
         response_path.write_text(_prompt_to_text(sample.get("output")), encoding="utf-8")
         gt_output_path = sample_dir / "gt_output.txt"
-        # gt_output_path.write_text(sample.get("ground_truth"), encoding="utf-8")   # inspecsafe
-        gt_output_path.write_text(sample.get("ground_truth_output"), encoding="utf-8")  # constructionsite
+        gt_output = (
+            sample.get("ground_truth_output")
+            or sample.get("ground_truth_answer")
+            or sample.get("ground_truth")
+            or ""
+        )
+        gt_output_path.write_text(_prompt_to_text(gt_output), encoding="utf-8")
 
     return len(samples)
 
@@ -179,7 +191,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-type",
-        choices=["auto", "inspecsafe", "constructionsite10k"],
+        choices=["auto", "inspecsafe", "constructionsite10k", "lab_safety"],
         default="auto",
         help="Evaluation metric type for the saved JSON.",
     )
@@ -201,6 +213,8 @@ def main() -> None:
     )
     if dataset_type == "constructionsite10k":
         payload = evaluate_constructionsite10k_results_json(args.results_json, output_json)
+    elif dataset_type == "lab_safety":
+        payload = evaluate_labsafety_results_json(args.results_json, output_json)
     else:
         payload = evaluate_results_json(args.results_json, output_json)
     exported = export_sample_details(
@@ -218,6 +232,16 @@ def main() -> None:
         print(f"Exact match:    {summary['exact_match_acc']:.4f}")
         print(f"Safe/unsafe:    {summary['safe_unsafe_acc']:.4f}")
         print(f"Macro F1:       {summary['macro_f1']:.4f}")
+    elif dataset_type == "lab_safety":
+        print(f"Total samples:  {summary['total']}")
+        print(f"Evaluated:      {summary['evaluated']}")
+        print(f"Correct:        {summary['correct']}")
+        print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(f"Parse failures: {summary['parse_failures']}")
+        print(
+            "Accuracy:       "
+            f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+        )
     else:
         print(f"Total samples:  {summary['total']}")
         print(f"Evaluated:      {summary['evaluated']}")

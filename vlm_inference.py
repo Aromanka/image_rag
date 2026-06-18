@@ -13,6 +13,8 @@ from config import (
     CONSTRUCTIONSITE10K_TASK,
     DEFAULT_SAFETY_QUERY,
     DEFAULT_CONSTRUCTIONSITE10K_QUERY,
+    DEFAULT_LAB_SAFETY_QUERY,
+    LAB_SAFETY_TASK,
     PROJECT_ROOT,
     SUPPORTED_TASK_TYPES,
     TOP_K,
@@ -44,6 +46,8 @@ def _default_query_for_task(task_type: str) -> str:
     task_type = _validate_task_type(task_type)
     if task_type == CONSTRUCTIONSITE10K_TASK:
         return DEFAULT_CONSTRUCTIONSITE10K_QUERY
+    if task_type == LAB_SAFETY_TASK:
+        return DEFAULT_LAB_SAFETY_QUERY
     return DEFAULT_SAFETY_QUERY
 
 
@@ -470,6 +474,14 @@ def build_baseline_prompt(task_type: str, query: str | None = None) -> str:
 Question for the query image:
 {query}
 """
+    if task_type == LAB_SAFETY_TASK:
+        from rag_answer import LAB_SAFETY_SYSTEM_PROMPT
+
+        return f"""{LAB_SAFETY_SYSTEM_PROMPT}
+
+Question for the query image:
+{query}
+"""
 
     return f"""You are a construction safety visual inspection assistant.
 
@@ -516,7 +528,11 @@ def VLM_inference_with_RAG(
     debug_mode: bool = False
 ) -> dict[str, Any]:
     """Retrieve similar examples, build a RAG prompt, and run the configured VLM."""
-    from rag_answer import build_constructionsite10k_rag_messages, build_rag_messages
+    from rag_answer import (
+        build_constructionsite10k_rag_messages,
+        build_labsafety_rag_messages,
+        build_rag_messages,
+    )
     from retriever import search_by_query_image
 
     task_type = _validate_task_type(task_type)
@@ -531,6 +547,8 @@ def VLM_inference_with_RAG(
         copy_image_to_demo(image_path, "query_image.png")
     if task_type == CONSTRUCTIONSITE10K_TASK:
         messages = build_constructionsite10k_rag_messages(query, image_path, retrieved)
+    elif task_type == LAB_SAFETY_TASK:
+        messages = build_labsafety_rag_messages(query, image_path, retrieved)
     else:
         messages = build_rag_messages(query, image_path, retrieved)
     output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)

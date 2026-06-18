@@ -4,6 +4,16 @@ from pathlib import Path
 from typing import Any
 
 from config import PROJECT_ROOT, TOP_K
+
+
+LAB_SAFETY_SYSTEM_PROMPT = """You are a laboratory safety expert reviewing images from a lab safety training dataset.
+
+Carefully analyse the provided image and the multiple-choice question. Select the single best answer from the options given.
+
+Read the question and all options carefully. Use visual evidence from the image to support your choice.
+Output a single capital letter only: A, B, C, or D. No explanation, no punctuation."""
+
+
 CONSTRUCTIONSITE10K_SYSTEM_PROMPT = """You are a professional construction site safety inspector with expertise in hazard identification and regulatory compliance.
 
 Carefully analyze the provided construction site image and assess safety compliance step by step.
@@ -201,6 +211,56 @@ def build_constructionsite10k_rag_messages(
 
     return [
         {"role": "system", "content": CONSTRUCTIONSITE10K_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
+
+def build_labsafety_rag_messages(
+    query: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build multi-image RAG messages for Lab Safety multiple-choice VQA."""
+    content: list[dict[str, str]] = []
+
+    for index, item in enumerate(retrieved_items, start=1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+
+        question = item.get("question") or item.get("caption", "")
+        answer = item.get("answer") or item.get("safe_label", "")
+        explanation = item.get("explanation", "")
+        category = item.get("category", "")
+        level = item.get("level", "")
+
+        details = [
+            f"Reference {index}:",
+            f"Question: {question}",
+            f"Correct answer: {answer}",
+        ]
+        if explanation:
+            details.append(f"Explanation: {explanation}")
+        if category:
+            details.append(f"Category: {category}")
+        if level:
+            details.append(f"Level: {level}")
+
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({"type": "text", "text": "\n".join(details)})
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            f"Query image question:\n{query}\n\n"
+            "Use the reference examples only as lab-safety context. "
+            "Answer the query image question with one capital letter only: A, B, C, or D."
+        ),
+    })
+
+    return [
+        {"role": "system", "content": LAB_SAFETY_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 
