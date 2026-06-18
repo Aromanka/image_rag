@@ -59,6 +59,7 @@ def get_embedding_tokenizer() -> Any:
     try:
         return AutoTokenizer.from_pretrained(
             resolve_model_path(),
+            use_fast=True,
             local_files_only=True,
         )
     except AttributeError as exc:
