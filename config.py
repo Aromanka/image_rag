@@ -32,9 +32,9 @@ DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
 DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 DEFAULT_LAB_SAFETY_QUERY = "Answer the lab safety multiple-choice question."
 
-# VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
+VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 # VLM_MODEL_PATH = "/root/autodl-tmp/model/gemma3_4b"
-VLM_MODEL_PATH = "/root/autodl-tmp/model/internvl2_4b"
+# VLM_MODEL_PATH = "/root/autodl-tmp/model/internvl2_4b"
 
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
