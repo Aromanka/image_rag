@@ -18,6 +18,9 @@ from transformers import AutoImageProcessor, AutoModel, AutoTokenizer
 from config import EMBED_BATCH_SIZE, EMBED_DEVICE, EMBED_MODEL_PATH
 
 
+DEFAULT_TEXT_MAX_LENGTH = 64
+
+
 def _is_siglip2_config(config_path: Path) -> bool:
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -94,6 +97,34 @@ def get_embedding_model() -> Any:
     return model.to(_embedding_device()).eval()
 
 
+def _text_max_length() -> int:
+    model = get_embedding_model()
+    tokenizer = get_embedding_tokenizer()
+
+    config = getattr(model, "config", None)
+    text_config = getattr(config, "text_config", None)
+    for source in (text_config, config, tokenizer):
+        max_length = getattr(source, "max_position_embeddings", None)
+        if isinstance(max_length, int) and 0 < max_length < 100000:
+            return max_length
+
+    tokenizer_max_length = getattr(tokenizer, "model_max_length", None)
+    if isinstance(tokenizer_max_length, int) and 0 < tokenizer_max_length < 100000:
+        return tokenizer_max_length
+
+    return DEFAULT_TEXT_MAX_LENGTH
+
+
+def _ensure_tokenizer_padding() -> None:
+    tokenizer = get_embedding_tokenizer()
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = getattr(tokenizer, "eos_token", None) or getattr(
+            tokenizer,
+            "unk_token",
+            None,
+        )
+
+
 def _feature_tensor(features: Any) -> torch.Tensor:
     if isinstance(features, torch.Tensor):
         return features
@@ -105,6 +136,8 @@ def _feature_tensor(features: Any) -> torch.Tensor:
 def _encode_texts(texts: Sequence[str]) -> list[list[float]]:
     model = get_embedding_model()
     tokenizer = get_embedding_tokenizer()
+    _ensure_tokenizer_padding()
+    max_length = _text_max_length()
     embeddings: list[list[float]] = []
 
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
@@ -113,6 +146,7 @@ def _encode_texts(texts: Sequence[str]) -> list[list[float]]:
             text=batch,
             padding="max_length",
             truncation=True,
+            max_length=max_length,
             return_tensors="pt",
         ).to(_embedding_device())
         with torch.inference_mode():
