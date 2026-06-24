@@ -21,10 +21,16 @@ MAX_TOP_K = 50
 
 SAFETY_JUDGEMENT_TASK = "safety judgement"
 CONSTRUCTIONSITE10K_TASK = "constructionsite10k"
+LAB_SAFETY_TASK = "lab_safety"
 
-SUPPORTED_TASK_TYPES = {SAFETY_JUDGEMENT_TASK, CONSTRUCTIONSITE10K_TASK}
+SUPPORTED_TASK_TYPES = {
+    SAFETY_JUDGEMENT_TASK,
+    CONSTRUCTIONSITE10K_TASK,
+    LAB_SAFETY_TASK,
+}
 DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
 DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
+DEFAULT_LAB_SAFETY_QUERY = "Answer the lab safety multiple-choice question."
 
 # VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 # VLM_MODEL_PATH = "/root/autodl-tmp/model/gemma3_4b"
