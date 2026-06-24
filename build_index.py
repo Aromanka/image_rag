@@ -183,6 +183,71 @@ def load_labsafety_dataset(dataset_json: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_labsafety_gen_dataset(dataset_jsonl: Path, split: str = "train") -> pd.DataFrame:
+    """Load LabSafety-v1 JSONL into the index CSV schema."""
+    if not dataset_jsonl.is_file():
+        raise FileNotFoundError(f"Dataset not found: {dataset_jsonl}")
+
+    split = split.strip().lower()
+    if split not in {"train", "test", "all"}:
+        raise ValueError("split must be one of: train, test, all.")
+
+    rows: list[dict[str, str]] = []
+    with dataset_jsonl.open("r", encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            line = line.strip()
+            if not line:
+                continue
+
+            sample = json.loads(line)
+            sample_split = str(sample.get("split", "")).strip().lower()
+            if split != "all" and sample_split != split:
+                continue
+
+            raw_image = str(sample.get("image", "")).replace("\\", "/")
+            image_path = dataset_jsonl.parent / raw_image
+            image_id = str(sample.get("image_id") or Path(raw_image).stem).strip()
+            safety_label = str(sample.get("safety_label", "")).strip().lower()
+            description = str(sample.get("description", "")).strip()
+            hazards = sample.get("hazards", [])
+            if isinstance(hazards, list):
+                hazards_text = "; ".join(str(item) for item in hazards)
+            else:
+                hazards_text = str(hazards).strip()
+            vlm_label = str(sample.get("vlm_label", "")).strip().lower()
+            agree = str(sample.get("agree", "")).strip()
+
+            caption_parts = [
+                f"Description: {description}",
+                f"Safety label: {safety_label}",
+            ]
+            if hazards_text:
+                caption_parts.append(f"Hazards: {hazards_text}")
+            if vlm_label:
+                caption_parts.append(f"VLM label: {vlm_label}")
+            if agree:
+                caption_parts.append(f"Agreement flag: {agree}")
+
+            rows.append(
+                {
+                    "id": image_id or f"line_{line_number:06d}",
+                    "image_path": str(image_path),
+                    "caption": "\n".join(caption_parts),
+                    "safe_label": safety_label,
+                    "description": description,
+                    "hazards": hazards_text,
+                    "vlm_label": vlm_label,
+                    "agree": agree,
+                    "split": sample_split,
+                }
+            )
+
+    dataframe = pd.DataFrame(rows)
+    if dataframe.empty:
+        raise ValueError(f"No LabSafety-v1 rows found for split: {split}.")
+    return dataframe
+
+
 def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
     missing_columns = REQUIRED_COLUMNS.difference(dataframe.columns)
     if missing_columns:
@@ -266,6 +331,11 @@ def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
                                 "explanation",
                                 "category",
                                 "level",
+                                "description",
+                                "hazards",
+                                "vlm_label",
+                                "agree",
+                                "split",
                             )
                             if key in row and str(row[key]).strip()
                         },
@@ -305,9 +375,13 @@ def build_labsafety_indexes(dataset_json: Path) -> None:
     build_indexes_from_dataframe(load_labsafety_dataset(dataset_json))
 
 
+def build_labsafety_gen_indexes(dataset_jsonl: Path, split: str) -> None:
+    build_indexes_from_dataframe(load_labsafety_gen_dataset(dataset_jsonl, split=split))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build caption and image indexes from a CSV or ConstructionSite-10K JSON."
+        description="Build caption and image indexes from a supported dataset file."
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
@@ -326,6 +400,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to Lab Safety train JSON.",
     )
+    source.add_argument(
+        "--lab-safety-gen-jsonl",
+        type=Path,
+        help="Path to LabSafety-v1 annotations.jsonl.",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["train", "test", "all"],
+        default="train",
+        help="Split to index for JSONL datasets that include a split field.",
+    )
     return parser.parse_args()
 
 
@@ -335,5 +420,7 @@ if __name__ == "__main__":
         build_constructionsite10k_indexes(args.constructionsite_json)
     elif args.lab_safety_json:
         build_labsafety_indexes(args.lab_safety_json)
+    elif args.lab_safety_gen_jsonl:
+        build_labsafety_gen_indexes(args.lab_safety_gen_jsonl, args.split)
     else:
         build_indexes(args.dataset_csv)

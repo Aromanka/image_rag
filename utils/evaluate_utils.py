@@ -50,6 +50,40 @@ def extract_choice_label(output: str | None) -> str | None:
     return None
 
 
+def _normalize_hazard_label(label: str) -> str | None:
+    normalized = label.strip().lower().replace("_", "-")
+    normalized = re.sub(r"\s+", " ", normalized)
+    if normalized in {"hazardous", "unsafe"}:
+        return "hazardous"
+    if normalized in {"non-hazardous", "non hazardous", "not hazardous", "safe"}:
+        return "non-hazardous"
+    return None
+
+
+def extract_hazard_label(output: str | None) -> str | None:
+    """Extract hazardous/non-hazardous label from VLM output text."""
+    if not output:
+        return None
+
+    text = output.strip().lower()
+    final_match = re.search(
+        r"final\s+label\s*:\s*(non[\s-]?hazardous|not\s+hazardous|hazardous|unsafe|safe)",
+        text,
+    )
+    if final_match:
+        return _normalize_hazard_label(final_match.group(1))
+
+    matches = [
+        _normalize_hazard_label(match.group(1))
+        for match in re.finditer(
+            r"\b(non[\s-]?hazardous|not\s+hazardous|safe|hazardous|unsafe)\b",
+            text,
+        )
+    ]
+    matches = [match for match in matches if match is not None]
+    return matches[-1] if matches else None
+
+
 def evaluate_results_json(
     results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
     output_json: str | Path | None = None,
@@ -235,6 +269,125 @@ def evaluate_labsafety_results_json(
         "errors_or_skipped": errors,
         "parse_failures": parse_failures,
         "accuracy": correct / evaluated if evaluated > 0 else 0.0,
+    }
+    data["confusion"] = confusion
+
+    if output_json is not None:
+        target_path = Path(output_json)
+    else:
+        target_path = source_path
+
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2, ensure_ascii=False, default=str)
+
+    return data
+
+
+def evaluate_labsafety_gen_results_json(
+    results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
+    output_json: str | Path | None = None,
+) -> dict[str, Any]:
+    """Evaluate saved LabSafety-v1 hazardous/non-hazardous inference results."""
+    source_path: Path | None = None
+    if isinstance(results_json, (str, Path)):
+        source_path = Path(results_json)
+        with source_path.open("r", encoding="utf-8") as file:
+            payload: dict[str, Any] | list[dict[str, Any]] = json.load(file)
+    else:
+        payload = results_json
+
+    if isinstance(payload, list):
+        data: dict[str, Any] = {"results": payload}
+    elif isinstance(payload, dict):
+        data = payload
+    else:
+        raise TypeError("results_json must be a path, dict, or list of dictionaries.")
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Results JSON must contain a 'results' list.")
+
+    labels = ["hazardous", "non-hazardous"]
+    confusion = {truth: {pred: 0 for pred in [*labels, "PARSE_FAIL"]} for truth in labels}
+    total = len(results)
+    correct = 0
+    errors = 0
+    parse_failures = 0
+    tp = fp = tn = fn = 0
+
+    for sample in results:
+        if not isinstance(sample, dict):
+            errors += 1
+            continue
+
+        ground_truth = _normalize_hazard_label(
+            str(
+                sample.get("ground_truth_hazard_label")
+                or sample.get("ground_truth_label")
+                or sample.get("ground_truth")
+                or ""
+            )
+        )
+        sample["ground_truth_hazard_label"] = ground_truth
+
+        if sample.get("error"):
+            sample["predicted"] = None
+            sample["status"] = "ERROR"
+            errors += 1
+            if ground_truth in confusion:
+                confusion[ground_truth]["PARSE_FAIL"] += 1
+            continue
+
+        if ground_truth not in labels:
+            sample["predicted"] = None
+            sample["status"] = "SKIP"
+            errors += 1
+            continue
+
+        predicted = extract_hazard_label(sample.get("output"))
+        sample["predicted"] = predicted
+
+        if predicted is None:
+            sample["status"] = "PARSE_FAIL"
+            parse_failures += 1
+            errors += 1
+            confusion[ground_truth]["PARSE_FAIL"] += 1
+        elif predicted == ground_truth:
+            sample["status"] = "CORRECT"
+            correct += 1
+            confusion[ground_truth][predicted] += 1
+            if predicted == "hazardous":
+                tp += 1
+            else:
+                tn += 1
+        else:
+            sample["status"] = "WRONG"
+            confusion[ground_truth][predicted] += 1
+            if predicted == "hazardous":
+                fp += 1
+            else:
+                fn += 1
+
+    evaluated = total - errors
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    data["summary"] = {
+        "total": total,
+        "evaluated": evaluated,
+        "correct": correct,
+        "errors_or_skipped": errors,
+        "parse_failures": parse_failures,
+        "accuracy": correct / evaluated if evaluated > 0 else 0.0,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "hazardous_precision": precision,
+        "hazardous_recall": recall,
+        "hazardous_f1": f1,
     }
     data["confusion"] = confusion
 
@@ -503,7 +656,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-type",
-        choices=["auto", "inspecsafe", "constructionsite10k", "lab_safety"],
+        choices=[
+            "auto",
+            "inspecsafe",
+            "constructionsite10k",
+            "lab_safety",
+            "lab_safety_gen",
+        ],
         default="auto",
         help="Evaluation metric type for the saved JSON.",
     )
@@ -531,6 +690,8 @@ def _detect_results_type(results_json: Path) -> str:
     if isinstance(results, list) and results:
         first = results[0]
         if isinstance(first, dict):
+            if "ground_truth_hazard_label" in first:
+                return "lab_safety_gen"
             if "ground_truth_answer" in first:
                 return "lab_safety"
             if "ground_truth_output" in first:
@@ -574,6 +735,22 @@ if __name__ == "__main__":
         print(f"Correct:        {summary['correct']}")
         print(f"Errors/Skipped: {summary['errors_or_skipped']}")
         print(f"Parse failures: {summary['parse_failures']}")
+        print(
+            "Accuracy:       "
+            f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+        )
+    elif dataset_type == "lab_safety_gen":
+        evaluated = evaluate_labsafety_gen_results_json(args.results_json, args.output_json)
+        summary = evaluated["summary"]
+        print(f"Total samples:  {summary['total']}")
+        print(f"Evaluated:      {summary['evaluated']}")
+        print(f"Correct:        {summary['correct']}")
+        print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(f"Parse failures: {summary['parse_failures']}")
+        print(f"TP:             {summary['tp']}")
+        print(f"FP:             {summary['fp']}")
+        print(f"TN:             {summary['tn']}")
+        print(f"FN:             {summary['fn']}")
         print(
             "Accuracy:       "
             f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"

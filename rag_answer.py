@@ -14,6 +14,21 @@ Read the question and all options carefully. Use visual evidence from the image 
 Output a single capital letter only: A, B, C, or D. No explanation, no punctuation."""
 
 
+LAB_SAFETY_GEN_SYSTEM_PROMPT = """You are a laboratory safety expert reviewing synthetic laboratory-scene images.
+
+Carefully inspect the query image for visible hazards, unsafe handling, missing PPE, unsafe storage, spills, fire or chemical risks, and other laboratory safety issues.
+
+Use the retrieved examples only as reference cases. Classify the query image itself as exactly one of:
+- hazardous
+- non-hazardous
+
+Return your answer in this format:
+Query image observations:
+Retrieved evidence:
+Reasoning:
+Final label: hazardous or non-hazardous"""
+
+
 CONSTRUCTIONSITE10K_SYSTEM_PROMPT = """You are a professional construction site safety inspector with expertise in hazard identification and regulatory compliance.
 
 Carefully analyze the provided construction site image and assess safety compliance step by step.
@@ -261,6 +276,58 @@ def build_labsafety_rag_messages(
 
     return [
         {"role": "system", "content": LAB_SAFETY_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
+
+def build_labsafety_gen_rag_messages(
+    query: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build multi-image RAG messages for generated lab-safety classification."""
+    content: list[dict[str, str]] = []
+
+    for index, item in enumerate(retrieved_items, start=1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+
+        label = item.get("safe_label", "")
+        description = item.get("description") or item.get("caption", "")
+        hazards = item.get("hazards", "")
+        vlm_label = item.get("vlm_label", "")
+        agree = item.get("agree", "")
+
+        details = [
+            f"Reference {index}:",
+            f"Ground-truth label: {label}",
+            f"Description: {description}",
+        ]
+        if hazards:
+            details.append(f"Hazards: {hazards}")
+        if vlm_label:
+            details.append(f"VLM label check: {vlm_label}")
+        if agree:
+            details.append(f"Agreement flag: {agree}")
+
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({"type": "text", "text": "\n".join(details)})
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            f"Query image task: {query}\n"
+            "Use the query image as primary evidence. Use the references only "
+            "to calibrate what hazardous and non-hazardous lab scenes look like.\n\n"
+            "Return the requested format and end with exactly one final label: "
+            "hazardous or non-hazardous."
+        ),
+    })
+
+    return [
+        {"role": "system", "content": LAB_SAFETY_GEN_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 

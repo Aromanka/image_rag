@@ -13,12 +13,14 @@ from typing import Any
 try:
     from utils.evaluate_utils import (
         evaluate_constructionsite10k_results_json,
+        evaluate_labsafety_gen_results_json,
         evaluate_labsafety_results_json,
         evaluate_results_json,
     )
 except ModuleNotFoundError:
     from evaluate_utils import (
         evaluate_constructionsite10k_results_json,
+        evaluate_labsafety_gen_results_json,
         evaluate_labsafety_results_json,
         evaluate_results_json,
     )
@@ -94,6 +96,8 @@ def _detect_dataset_type(results_json: Path) -> str:
     if isinstance(results, list) and results:
         first = results[0]
         if isinstance(first, dict):
+            if "ground_truth_hazard_label" in first:
+                return "lab_safety_gen"
             if "ground_truth_answer" in first:
                 return "lab_safety"
             if "ground_truth_output" in first:
@@ -144,6 +148,7 @@ def export_sample_details(
         gt_output = (
             sample.get("ground_truth_output")
             or sample.get("ground_truth_answer")
+            or sample.get("ground_truth_hazard_label")
             or sample.get("ground_truth")
             or ""
         )
@@ -191,7 +196,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-type",
-        choices=["auto", "inspecsafe", "constructionsite10k", "lab_safety"],
+        choices=[
+            "auto",
+            "inspecsafe",
+            "constructionsite10k",
+            "lab_safety",
+            "lab_safety_gen",
+        ],
         default="auto",
         help="Evaluation metric type for the saved JSON.",
     )
@@ -215,6 +226,8 @@ def main() -> None:
         payload = evaluate_constructionsite10k_results_json(args.results_json, output_json)
     elif dataset_type == "lab_safety":
         payload = evaluate_labsafety_results_json(args.results_json, output_json)
+    elif dataset_type == "lab_safety_gen":
+        payload = evaluate_labsafety_gen_results_json(args.results_json, output_json)
     else:
         payload = evaluate_results_json(args.results_json, output_json)
     exported = export_sample_details(
@@ -238,6 +251,17 @@ def main() -> None:
         print(f"Correct:        {summary['correct']}")
         print(f"Errors/Skipped: {summary['errors_or_skipped']}")
         print(f"Parse failures: {summary['parse_failures']}")
+        print(
+            "Accuracy:       "
+            f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
+        )
+    elif dataset_type == "lab_safety_gen":
+        print(f"Total samples:  {summary['total']}")
+        print(f"Evaluated:      {summary['evaluated']}")
+        print(f"Correct:        {summary['correct']}")
+        print(f"Errors/Skipped: {summary['errors_or_skipped']}")
+        print(f"Parse failures: {summary['parse_failures']}")
+        print(f"Hazard F1:      {summary['hazardous_f1']:.4f}")
         print(
             "Accuracy:       "
             f"{summary['accuracy']:.4f} ({summary['correct']}/{summary['evaluated']})"
