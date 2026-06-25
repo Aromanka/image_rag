@@ -30,11 +30,12 @@ python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotat
 Optional quick smoke run:
 ```bash
 python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode rag --limit 10
+python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode baseline --limit 10
 ```
 
 3. Check details
 ```bash
-python utils/evaluate_rag_details.py /root/autodl-tmp/code/image_rag/save/eval_results_labsafety_gen_rag_XXXXXXXXXX.json --dataset-type lab_safety_gen --demo-dir demo/lab_safety_gen_rag_details --sample-ids ls_bench_0021__02 ls_bench_0025__01
+python utils/evaluate_rag_details.py save/eval_results_labsafety_gen_rag_1782311673.json --dataset-type lab_safety_gen --demo-dir demo/lab_safety_gen_rag_details --sample-ids ls_bench_0021__02 ls_bench_0025__01 ls_bench_0044__02 ls_bench_0046__03 ls_bench_0053__03 ls_bench_0054__00
 ```
 
 4. API task type
