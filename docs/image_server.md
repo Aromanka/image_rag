@@ -45,6 +45,13 @@ ssh -N \
   root@connect.westc.seetacloud.com
 ```
 
+2. terminal 2(upload image)
+```bash
+curl --data-binary @query_image.jpg \
+  -H "Content-Type: image/jpeg" \
+  "http://127.0.0.1:18000/infer?dataset=construction_site"
+```
+
 Switch the RAG dataset per request without restarting the service:
 
 ```bash
