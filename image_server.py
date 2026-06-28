@@ -12,7 +12,7 @@ import tempfile
 import time
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
@@ -111,13 +111,14 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok", "default_dataset": canonical_default}
 
-    @app.post("/infer", response_class=PlainTextResponse)
+    @app.post("/infer", response_class=JSONResponse)
     async def infer(
         request: Request,
         background_tasks: BackgroundTasks,
         dataset: str | None = Query(default=None),
         top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
-    ) -> PlainTextResponse:
+    ) -> JSONResponse:
+        request_started = time.perf_counter()
         selected = dataset or canonical_default
         try:
             canonical_dataset, task_type = _resolve_dataset(selected)
@@ -150,7 +151,6 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
         effective_top_k = top_k or default_top_k
-        started = time.perf_counter()
         print(
             f"Inference started: dataset={canonical_dataset} "
             f"bytes={len(payload)} top_k={effective_top_k}",
@@ -179,7 +179,7 @@ def create_app(
                 detail=str(exc),
             )
 
-        elapsed = time.perf_counter() - started
+        elapsed = time.perf_counter() - request_started
         output = str(result["output"])
         print(f"Inference result ({elapsed:.3f}s):\n{output}\n", flush=True)
         if RESPONSE_FORWARD_URL:
@@ -191,8 +191,12 @@ def create_app(
                 inference_seconds=elapsed,
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
-        return PlainTextResponse(
-            output,
+        return JSONResponse(
+            {
+                "dataset": canonical_dataset,
+                "response": output,
+                "response_time_seconds": round(elapsed, 3),
+            },
             headers={
                 "X-Dataset": canonical_dataset,
                 "X-Inference-Seconds": f"{elapsed:.3f}",

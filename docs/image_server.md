@@ -1,8 +1,8 @@
 # Minimal image inference server
 
 The server accepts image bytes directly, runs RAG inference immediately, prints
-the full model output in the terminal, and returns the same output as plain text.
-It keeps SigLIP2 and the VLM loaded between requests.
+the full model output in the terminal, and returns a JSON response. It keeps
+SigLIP2 and the VLM loaded between requests.
 
 ## 1. Build one independent index for each dataset
 
@@ -31,6 +31,16 @@ Use the startup default dataset:
 
 ```bash
 curl --data-binary @query.jpg -H "Content-Type: image/jpeg" http://SERVER_IP:8000/infer
+curl --data-binary @query_image.jpg -H "Content-Type: image/jpeg" http://connect.westc.seetacloud.com:8000/infer
+```
+
+for autodl server:
+1. terminal 1
+```bash
+ssh -N \
+  -L 18000:127.0.0.1:8000 \
+  -p SSH_PORT \
+  root@connect.westc.seetacloud.com
 ```
 
 Switch the RAG dataset per request without restarting the service:
@@ -43,6 +53,21 @@ curl --data-binary @query.png -H "Content-Type: image/png" "http://SERVER_IP:800
 
 An optional `top_k` query parameter overrides the server default, for example
 `/infer?dataset=inspecsafe&top_k=3`.
+
+The response body contains the model output and the complete request latency:
+
+```json
+{
+  "dataset": "inspecsafe",
+  "response": "Query image observations: ...",
+  "response_time_seconds": 2.731
+}
+```
+
+`response_time_seconds` measures from the moment `/infer` starts receiving the
+request—including reading and validating the image, waiting for the inference
+lock, retrieval, and VLM generation—until the response is created. Response
+forwarding runs afterward and is not included in this value.
 
 Only one GPU inference runs at a time. Extra requests wait in memory, which
 avoids concurrent requests exhausting VRAM. If the port should not be public,
@@ -170,6 +195,16 @@ The image-service response headers should include:
 ```text
 X-Dataset: inspecsafe
 X-Response-Forwarding: scheduled
+```
+
+Its JSON response body should include:
+
+```json
+{
+  "dataset": "inspecsafe",
+  "response": "<model output>",
+  "response_time_seconds": 2.731
+}
 ```
 
 The GPU server should print the inference result followed by a successful
