@@ -31,7 +31,9 @@ Use the startup default dataset:
 
 ```bash
 curl --data-binary @query.jpg -H "Content-Type: image/jpeg" http://SERVER_IP:8000/infer
-curl --data-binary @query_image.jpg -H "Content-Type: image/jpeg" http://connect.westc.seetacloud.com:8000/infer
+curl --data-binary @query_image.jpg \
+  -H "Content-Type: image/jpeg" \
+  "http://127.0.0.1:18000/infer?dataset=construction_site"
 ```
 
 for autodl server:
