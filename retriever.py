@@ -14,9 +14,11 @@ from config import (
     CHROMA_DIR,
     DEMO_DIR,
     IMAGE_COLLECTION,
+    INSPECSAFE_DATASET,
     MAX_TOP_K,
     PROJECT_ROOT,
     TOP_K,
+    SUPPORTED_RAG_DATASETS,
 )
 from embedding import encode_images, encode_query
 
@@ -88,18 +90,37 @@ def resolve_query_image_path(query_image: str | Path) -> Path:
     return path
 
 
-@lru_cache(maxsize=1)
-def _client():
-    return chromadb.PersistentClient(path=str(CHROMA_DIR))
+def _index_dir(dataset: str | None) -> Path:
+    if dataset is None:
+        return CHROMA_DIR
+    normalized = dataset.strip().lower()
+    if normalized not in SUPPORTED_RAG_DATASETS:
+        supported = ", ".join(sorted(SUPPORTED_RAG_DATASETS))
+        raise ValueError(
+            f"Unsupported RAG dataset '{dataset}'. Supported: {supported}."
+        )
+    return CHROMA_DIR / normalized
 
 
-def _collection(name: str):
+@lru_cache(maxsize=None)
+def _client(index_dir: str):
+    return chromadb.PersistentClient(path=index_dir)
+
+
+def _collection(name: str, dataset: str | None = None):
+    index_dir = _index_dir(dataset)
     try:
-        return _client().get_collection(name)
+        return _client(str(index_dir)).get_collection(name)
     except Exception as exc:
         raise RuntimeError(
-            f"Index collection '{name}' is unavailable. Build the indexes first."
+            f"Index collection '{name}' is unavailable in '{index_dir}'. "
+            "Build the indexes for this dataset first."
         ) from exc
+
+
+def index_item_count(dataset: str) -> int:
+    """Return the image-index size for a dataset, or raise if it is unavailable."""
+    return _collection(IMAGE_COLLECTION, dataset).count()
 
 
 def _format_results(results: dict[str, Any]) -> list[SearchResult]:
@@ -119,8 +140,9 @@ def _search_collection(
     collection_name: str,
     embedding: list[float],
     top_k: int,
+    dataset: str | None = None,
 ) -> list[SearchResult]:
-    collection = _collection(collection_name)
+    collection = _collection(collection_name, dataset)
     item_count = collection.count()
     if item_count == 0:
         raise RuntimeError(f"Index collection '{collection_name}' is empty.")
@@ -131,21 +153,43 @@ def _search_collection(
     return _format_results(results)
 
 
-def search_by_caption(query: str, top_k: int = TOP_K) -> list[SearchResult]:
+def search_by_caption(
+    query: str,
+    top_k: int = TOP_K,
+    *,
+    dataset: str | None = INSPECSAFE_DATASET,
+) -> list[SearchResult]:
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
-    return _search_collection(CAPTION_COLLECTION, encode_query(query), top_k)
+    return _search_collection(
+        CAPTION_COLLECTION,
+        encode_query(query),
+        top_k,
+        dataset,
+    )
 
 
-def search_by_image_embedding(query: str, top_k: int = TOP_K) -> list[SearchResult]:
+def search_by_image_embedding(
+    query: str,
+    top_k: int = TOP_K,
+    *,
+    dataset: str | None = INSPECSAFE_DATASET,
+) -> list[SearchResult]:
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
-    return _search_collection(IMAGE_COLLECTION, encode_query(query), top_k)
+    return _search_collection(
+        IMAGE_COLLECTION,
+        encode_query(query),
+        top_k,
+        dataset,
+    )
 
 
 def search_by_query_image(
     query_image: str | Path,
     top_k: int = TOP_K,
+    *,
+    dataset: str | None = INSPECSAFE_DATASET,
 ) -> list[SearchResult]:
     """Retrieve visually similar examples for a local query image."""
     top_k = _validate_top_k(top_k)
@@ -156,16 +200,25 @@ def search_by_query_image(
     except UnidentifiedImageError as exc:
         raise ValueError(f"Invalid query image: {image_path}") from exc
 
-    return _search_collection(IMAGE_COLLECTION, embedding, top_k)
+    return _search_collection(IMAGE_COLLECTION, embedding, top_k, dataset)
 
 
-def hybrid_search(query: str, top_k: int = TOP_K) -> list[SearchResult]:
+def hybrid_search(
+    query: str,
+    top_k: int = TOP_K,
+    *,
+    dataset: str | None = INSPECSAFE_DATASET,
+) -> list[SearchResult]:
     """Fuse both ranked lists using reciprocal rank fusion."""
     query = _validate_query(query)
     top_k = _validate_top_k(top_k)
     embedding = encode_query(query)
-    caption_results = _search_collection(CAPTION_COLLECTION, embedding, top_k)
-    image_results = _search_collection(IMAGE_COLLECTION, embedding, top_k)
+    caption_results = _search_collection(
+        CAPTION_COLLECTION, embedding, top_k, dataset
+    )
+    image_results = _search_collection(
+        IMAGE_COLLECTION, embedding, top_k, dataset
+    )
 
     fused: dict[str, SearchResult] = {}
     for source, results in (

@@ -19,6 +19,7 @@ from config import (
     LAB_SAFETY_TASK,
     PROJECT_ROOT,
     SUPPORTED_TASK_TYPES,
+    TASK_TO_RAG_DATASET,
     TOP_K,
     VLM_MAX_NEW_TOKENS,
     VLM_MODEL_PATH,
@@ -467,6 +468,15 @@ def _run_vlm_messages(
     return _run_qwen25vl_messages(messages, max_new_tokens=max_new_tokens)
 
 
+def preload_models() -> None:
+    """Load both retrieval and generation models before serving requests."""
+    from embedding import get_embedding_image_processor, get_embedding_model
+
+    get_embedding_image_processor()
+    get_embedding_model()
+    _vlm_components()
+
+
 def build_baseline_prompt(task_type: str, query: str | None = None) -> str:
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
@@ -551,7 +561,11 @@ def VLM_inference_with_RAG(
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
     image_path = _resolve_query_image_path(query_image)
-    retrieved = search_by_query_image(query_image, top_k=top_k)
+    retrieved = search_by_query_image(
+        query_image,
+        top_k=top_k,
+        dataset=TASK_TO_RAG_DATASET[task_type],
+    )
     if debug_mode:
         from retriever import copy_image_to_demo, save_retrieved_images
 

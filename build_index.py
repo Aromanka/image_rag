@@ -15,9 +15,13 @@ from PIL import Image, UnidentifiedImageError
 from config import (
     CAPTION_COLLECTION,
     CHROMA_DIR,
+    CONSTRUCTIONSITE10K_DATASET,
     EMBED_BATCH_SIZE,
     EMBED_MODEL_PATH,
     IMAGE_COLLECTION,
+    INSPECSAFE_DATASET,
+    LAB_SAFETY_DATASET,
+    LAB_SAFETY_GEN_DATASET,
     PROJECT_ROOT,
     RESET_COLLECTIONS_ON_BUILD,
 )
@@ -248,7 +252,11 @@ def load_labsafety_gen_dataset(dataset_jsonl: Path, split: str = "train") -> pd.
     return dataframe
 
 
-def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
+def build_indexes_from_dataframe(
+    dataframe: pd.DataFrame,
+    *,
+    dataset: str,
+) -> None:
     missing_columns = REQUIRED_COLUMNS.difference(dataframe.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -260,7 +268,8 @@ def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
     if dataframe["id"].duplicated().any():
         raise ValueError("Dataset IDs must be unique.")
 
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    index_dir = CHROMA_DIR / dataset
+    client = chromadb.PersistentClient(path=str(index_dir))
 
     if RESET_COLLECTIONS_ON_BUILD:
         existing_collections = {
@@ -360,23 +369,35 @@ def build_indexes_from_dataframe(dataframe: pd.DataFrame) -> None:
             pbar.set_description(f"Batch start={start} | elapsed={elapsed:.2f}s")
             pbar.update(1)
 
-    print(f"Built both indexes with {len(dataframe)} items in {CHROMA_DIR}.")
+    print(f"Built both indexes with {len(dataframe)} items in {index_dir}.")
 
 
 def build_indexes(dataset_csv: Path) -> None:
-    build_indexes_from_dataframe(load_dataset(dataset_csv))
+    build_indexes_from_dataframe(
+        load_dataset(dataset_csv),
+        dataset=INSPECSAFE_DATASET,
+    )
 
 
 def build_constructionsite10k_indexes(dataset_json: Path) -> None:
-    build_indexes_from_dataframe(load_constructionsite10k_dataset(dataset_json))
+    build_indexes_from_dataframe(
+        load_constructionsite10k_dataset(dataset_json),
+        dataset=CONSTRUCTIONSITE10K_DATASET,
+    )
 
 
 def build_labsafety_indexes(dataset_json: Path) -> None:
-    build_indexes_from_dataframe(load_labsafety_dataset(dataset_json))
+    build_indexes_from_dataframe(
+        load_labsafety_dataset(dataset_json),
+        dataset=LAB_SAFETY_DATASET,
+    )
 
 
 def build_labsafety_gen_indexes(dataset_jsonl: Path, split: str) -> None:
-    build_indexes_from_dataframe(load_labsafety_gen_dataset(dataset_jsonl, split=split))
+    build_indexes_from_dataframe(
+        load_labsafety_gen_dataset(dataset_jsonl, split=split),
+        dataset=LAB_SAFETY_GEN_DATASET,
+    )
 
 
 def parse_args() -> argparse.Namespace:
