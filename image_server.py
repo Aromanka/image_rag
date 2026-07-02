@@ -1,4 +1,4 @@
-"""Minimal raw-image HTTP server for low-latency RAG inference.
+"""Minimal raw-image HTTP server for low-latency VLM or RAG inference.
 
 Send the image bytes directly in the POST body. No multipart form is required.
 """
@@ -26,9 +26,13 @@ from config import (
     TOP_K,
     VLM_MAX_NEW_TOKENS,
 )
-from retriever import index_item_count
 from response_forwarding import forward_text_response
-from vlm_inference import VLM_inference_with_RAG, preload_models
+from vlm_inference import (
+    VLM_inference,
+    VLM_inference_with_RAG,
+    preload_models,
+    preload_vlm_model,
+)
 
 
 DATASET_ALIASES = {
@@ -76,6 +80,7 @@ def create_app(
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
     max_upload_mb: int = 20,
     preload: bool = True,
+    use_rag: bool = False,
 ) -> FastAPI:
     canonical_default, _ = _resolve_dataset(default_dataset)
     max_upload_bytes = max_upload_mb * 1024 * 1024
@@ -83,18 +88,25 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        datasets = ("inspecsafe", "constructionsite10k", "lab_safety_gen")
-        for dataset in datasets:
-            try:
-                count = index_item_count(dataset)
-                print(f"RAG index ready: {dataset} ({count} images)", flush=True)
-            except RuntimeError as exc:
-                print(f"RAG index unavailable: {dataset} ({exc})", flush=True)
+        if use_rag:
+            from retriever import index_item_count
+
+            datasets = ("inspecsafe", "constructionsite10k", "lab_safety_gen")
+            for dataset in datasets:
+                try:
+                    count = index_item_count(dataset)
+                    print(f"RAG index ready: {dataset} ({count} images)", flush=True)
+                except RuntimeError as exc:
+                    print(f"RAG index unavailable: {dataset} ({exc})", flush=True)
 
         if preload:
-            print("Loading SigLIP2 and VLM models...", flush=True)
-            await run_in_threadpool(preload_models)
-            print("Models loaded. Server is ready.", flush=True)
+            if use_rag:
+                print("Loading SigLIP2 and VLM models...", flush=True)
+                await run_in_threadpool(preload_models)
+            else:
+                print("Loading VLM model...", flush=True)
+                await run_in_threadpool(preload_vlm_model)
+            print("Model loading complete. Server is ready.", flush=True)
         if RESPONSE_FORWARD_URL:
             print(f"Response forwarding enabled: {RESPONSE_FORWARD_URL}", flush=True)
         else:
@@ -102,7 +114,7 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="Image RAG inference",
+        title="Image RAG inference" if use_rag else "Image VLM inference",
         version="1.0.0",
         lifespan=lifespan,
     )
@@ -152,8 +164,9 @@ def create_app(
 
         effective_top_k = top_k or default_top_k
         print(
-            f"Inference started: dataset={canonical_dataset} "
-            f"bytes={len(payload)} top_k={effective_top_k}",
+            f"Inference started: mode={'rag' if use_rag else 'vlm'} "
+            f"dataset={canonical_dataset} bytes={len(payload)}"
+            + (f" top_k={effective_top_k}" if use_rag else ""),
             flush=True,
         )
 
@@ -162,13 +175,21 @@ def create_app(
                 image_path = Path(temp_dir) / f"query{suffix}"
                 image_path.write_bytes(payload)
                 async with inference_lock:
-                    result = await run_in_threadpool(
-                        VLM_inference_with_RAG,
-                        task_type,
-                        image_path,
-                        top_k=effective_top_k,
-                        max_new_tokens=max_new_tokens,
-                    )
+                    if use_rag:
+                        result = await run_in_threadpool(
+                            VLM_inference_with_RAG,
+                            task_type,
+                            image_path,
+                            top_k=effective_top_k,
+                            max_new_tokens=max_new_tokens,
+                        )
+                    else:
+                        result = await run_in_threadpool(
+                            VLM_inference,
+                            task_type,
+                            image_path,
+                            max_new_tokens=max_new_tokens,
+                        )
         except (FileNotFoundError, ValueError) as exc:
             print(f"Inference rejected: {exc}", flush=True)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -215,7 +236,7 @@ app = create_app()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Serve RAG inference from raw image POST requests."
+        description="Serve VLM inference from raw image POST requests."
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
@@ -227,6 +248,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument("--max-upload-mb", type=int, default=20)
+    parser.add_argument(
+        "--rag",
+        action="store_true",
+        help="Enable retrieval-augmented inference (default: pure VLM inference).",
+    )
     parser.add_argument(
         "--no-preload",
         action="store_true",
@@ -257,6 +283,7 @@ if __name__ == "__main__":
             max_new_tokens=args.max_new_tokens,
             max_upload_mb=args.max_upload_mb,
             preload=not args.no_preload,
+            use_rag=args.rag,
         ),
         host=args.host,
         port=args.port,

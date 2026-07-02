@@ -468,13 +468,18 @@ def _run_vlm_messages(
     return _run_qwen25vl_messages(messages, max_new_tokens=max_new_tokens)
 
 
+def preload_vlm_model() -> None:
+    """Load only the generation model before serving baseline requests."""
+    _vlm_components()
+
+
 def preload_models() -> None:
-    """Load both retrieval and generation models before serving requests."""
+    """Load both retrieval and generation models before serving RAG requests."""
     from embedding import get_embedding_image_processor, get_embedding_model
 
     get_embedding_image_processor()
     get_embedding_model()
-    _vlm_components()
+    preload_vlm_model()
 
 
 def build_baseline_prompt(task_type: str, query: str | None = None) -> str:

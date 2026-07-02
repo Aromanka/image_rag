@@ -1,8 +1,22 @@
 # Minimal image inference server
 
-The server accepts image bytes directly, runs RAG inference immediately, prints
-the full model output in the terminal, and returns a JSON response. It keeps
-SigLIP2 and the VLM loaded between requests.
+The server accepts image bytes directly, runs inference immediately, prints the
+full model output in the terminal, and returns a JSON response. Pure VLM mode is
+the default and keeps only the VLM loaded. RAG mode additionally keeps SigLIP2
+loaded and uses the selected dataset's vector index.
+
+## Pure VLM mode (without RAG)
+
+Start the server with no mode flag:
+
+```bash
+python image_server.py --host 0.0.0.0 --port 8000
+```
+
+The request and response interfaces are the same as in RAG mode. `dataset`
+still selects the task-specific prompt, but no image retrieval or ChromaDB index
+is used. The `top_k` parameter is accepted for interface compatibility and is
+ignored in this mode.
 
 ## 1. Build one independent index for each dataset
 
@@ -19,10 +33,11 @@ longer overwrite each other.
 ## 2. Start one server process
 
 ```bash
-python image_server.py --host 0.0.0.0 --port 8000 --dataset inspecsafe --top-k 5
+python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset inspecsafe --top-k 5
+python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset constructionsite10k --top-k 3
 ```
 
-Model loading happens during startup. Wait for `Models loaded. Server is ready.`
+Model loading happens during startup. Wait for `Model loading complete. Server is ready.`
 before sending the first image.
 
 ## 3. Send an image
@@ -36,7 +51,7 @@ curl --data-binary @query_image.jpg \
   "http://127.0.0.1:18000/infer?dataset=construction_site"
 ```
 
-for autodl server:
+**for autodl server:**
 1. terminal 1
 ```bash
 ssh -N \
@@ -179,6 +194,7 @@ Then restart the image inference service:
 python image_server.py \
   --host 0.0.0.0 \
   --port 8000 \
+  --rag \
   --dataset inspecsafe \
   --top-k 5
 ```
