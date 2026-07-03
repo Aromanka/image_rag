@@ -3,7 +3,13 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from config import MAX_TOP_K, TOP_K, VLM_MAX_NEW_TOKENS
+from config import (
+    INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+    MAX_TOP_K,
+    TOP_K,
+    VLM_MAX_NEW_TOKENS,
+)
 from rag_answer import answer
 from retriever import (
     hybrid_search,
@@ -12,7 +18,11 @@ from retriever import (
     search_by_image_embedding,
     search_by_query_image,
 )
-from vlm_inference import VLM_inference, VLM_inference_with_RAG
+from vlm_inference import (
+    VLM_inference,
+    VLM_inference_two_stage,
+    VLM_inference_with_RAG,
+)
 
 
 app = FastAPI(
@@ -40,6 +50,20 @@ class VLMInferenceRequest(ImagePathRequest):
     task_type: str = "safety judgement"
     query: str | None = None
     max_new_tokens: int = Field(default=VLM_MAX_NEW_TOKENS, ge=1)
+
+
+class TwoStageVLMInferenceRequest(BaseModel):
+    query_image: str = Field(min_length=1)
+    task_type: str = "safety judgement"
+    query: str | None = None
+    stage_one_max_new_tokens: int = Field(
+        default=INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+        ge=1,
+    )
+    stage_two_max_new_tokens: int = Field(
+        default=INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+        ge=1,
+    )
 
 
 def execute(operation, request: QueryRequest):
@@ -110,6 +134,20 @@ def vlm_rag_inference(request: VLMInferenceRequest):
             query=request.query,
             top_k=request.top_k,
             max_new_tokens=request.max_new_tokens,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/vlm/two-stage-inference")
+def vlm_two_stage_inference(request: TwoStageVLMInferenceRequest):
+    try:
+        return VLM_inference_two_stage(
+            request.task_type,
+            request.query_image,
+            query=request.query,
+            stage_one_max_new_tokens=request.stage_one_max_new_tokens,
+            stage_two_max_new_tokens=request.stage_two_max_new_tokens,
         )
     except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -62,6 +62,11 @@ VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
 
+# Two-stage InspecSafe inference limits. The first pass is deliberately short
+# because it is only a gate; the second pass runs only after an unsafe result.
+INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS = 8
+INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS = 128
+
 # Model outputs are POSTed as UTF-8 text/plain after inference. Leave empty to
 # disable forwarding. Example: "http://192.168.1.20:9000/response"
 RESPONSE_FORWARD_URL = ""

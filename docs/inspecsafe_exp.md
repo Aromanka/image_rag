@@ -17,9 +17,51 @@ python build_index.py --dataset-csv data/inspecsafe/train.csv
 ```bash
 python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
 python evaluate_inspecsafe.py --mode baseline --dataset-csv data/inspecsafe/test_balanced.csv
+python evaluate_inspecsafe.py --mode two-stage --dataset-csv data/inspecsafe/test_balanced.csv
 python evaluate_inspecsafe.py --mode rag --top-k 5 --limit 1000 --dataset-csv data/inspecsafe/test.csv
 python utils/evaluate_rag_details.py /root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json --demo-dir demo/inspecsafe_rag_details --sample-ids 1015 175 1132 61 526 1234
 ```
 
 InspecSafe RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json`
 constructionsite RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_constructionsite10k_rag_1781160915.json`
+
+## Two-stage InspecSafe inference
+
+The `two-stage` evaluation mode uses the same dataset and metrics as the
+existing InspecSafe evaluation:
+
+1. Stage one generates at most 8 new tokens and requests only `safe` or
+   `unsafe`. A result other than an unambiguous `unsafe` is finalized as
+   `safe` without another generation.
+2. Stage two runs only after stage one returns `unsafe`. It generates at most
+   128 new tokens, provides a short annotation, and makes an independent final
+   judgement.
+3. The final result is `unsafe` only when both stages return `unsafe`.
+   Otherwise it is `safe` and its annotation is empty.
+
+The limits can be overridden for experiments:
+
+```bash
+python evaluate_inspecsafe.py \
+  --mode two-stage \
+  --dataset-csv data/inspecsafe/test.csv \
+  --stage-one-max-new-tokens 8 \
+  --stage-two-max-new-tokens 128
+```
+
+Saved evaluation samples retain `stage_one`, `stage_two`, and `annotation`
+fields for prompt/output debugging. Their normalized `output` field remains
+`safe` or `unsafe`, so the existing `evaluate_results_json` metric path works
+without special parsing.
+
+The same pipeline is available over HTTP:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/vlm/two-stage-inference" \
+  -H "Content-Type: application/json" \
+  -d '{"query_image":"/path/to/query.jpg"}'
+```
+
+The response always includes `label`, `annotation`, `stage_one`, and
+`stage_two`. `stage_two` is `null` when the first stage does not return
+`unsafe`.

@@ -8,7 +8,13 @@ from typing import Any
 
 import pandas as pd
 
-from config import PROJECT_ROOT, TOP_K, VLM_MAX_NEW_TOKENS
+from config import (
+    INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+    PROJECT_ROOT,
+    TOP_K,
+    VLM_MAX_NEW_TOKENS,
+)
 from utils.evaluate_utils import evaluate_results_json, extract_label
 from tqdm import tqdm
 
@@ -26,10 +32,16 @@ def run_evaluation(
     mode: str,
     top_k: int,
     max_new_tokens: int,
+    stage_one_max_new_tokens: int,
+    stage_two_max_new_tokens: int,
     limit: int | None,
     offset: int,
 ) -> None:
-    from vlm_inference import VLM_inference, VLM_inference_with_RAG
+    from vlm_inference import (
+        VLM_inference,
+        VLM_inference_two_stage,
+        VLM_inference_with_RAG,
+    )
 
     df = pd.read_csv(dataset_csv)
     required_cols = {"id", "image_path", "safe_label"}
@@ -81,6 +93,13 @@ def run_evaluation(
                     image_path,
                     max_new_tokens=max_new_tokens,
                 )
+            elif mode == "two-stage":
+                result = VLM_inference_two_stage(
+                    "safety judgement",
+                    image_path,
+                    stage_one_max_new_tokens=stage_one_max_new_tokens,
+                    stage_two_max_new_tokens=stage_two_max_new_tokens,
+                )
             else:
                 result = VLM_inference_with_RAG(
                     "safety judgement",
@@ -108,6 +127,10 @@ def run_evaluation(
                 "predicted": predicted,
                 "status": status,
             }
+            if mode == "two-stage":
+                sample_result["annotation"] = result.get("annotation", "")
+                sample_result["stage_one"] = result.get("stage_one")
+                sample_result["stage_two"] = result.get("stage_two")
             if mode == "rag":
                 sample_result["retrieved_image_paths"] = _retrieved_image_paths(result)
             results.append(sample_result)            
@@ -140,6 +163,8 @@ def run_evaluation(
             "mode": mode,
             "top_k": top_k,
             "max_new_tokens": max_new_tokens,
+            "stage_one_max_new_tokens": stage_one_max_new_tokens,
+            "stage_two_max_new_tokens": stage_two_max_new_tokens,
             "limit": limit,
             "offset": offset,
             "elapsed_seconds": elapsed,
@@ -187,12 +212,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["baseline", "rag"],
+        choices=["baseline", "rag", "two-stage"],
         default="rag",
-        help="Inference mode: baseline (no retrieval) or rag (with retrieval).",
+        help=(
+            "Inference mode: baseline, rag, or gated two-stage InspecSafe "
+            "classification."
+        ),
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
+    parser.add_argument(
+        "--stage-one-max-new-tokens",
+        type=int,
+        default=INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+        help="Generation limit for the first two-stage classification pass.",
+    )
+    parser.add_argument(
+        "--stage-two-max-new-tokens",
+        type=int,
+        default=INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+        help="Generation limit for the two-stage verification pass.",
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -215,6 +255,8 @@ if __name__ == "__main__":
         mode=args.mode,
         top_k=args.top_k,
         max_new_tokens=args.max_new_tokens,
+        stage_one_max_new_tokens=args.stage_one_max_new_tokens,
+        stage_two_max_new_tokens=args.stage_two_max_new_tokens,
         limit=args.limit,
         offset=args.offset,
     )

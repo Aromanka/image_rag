@@ -17,7 +17,10 @@ from config import (
     DEFAULT_LAB_SAFETY_QUERY,
     LAB_SAFETY_GEN_TASK,
     LAB_SAFETY_TASK,
+    INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     PROJECT_ROOT,
+    SAFETY_JUDGEMENT_TASK,
     SUPPORTED_TASK_TYPES,
     TASK_TO_RAG_DATASET,
     TOP_K,
@@ -542,6 +545,47 @@ def VLM_inference(
         "query": query,
         "prompt": prompt,
         "output": output,
+    }
+
+
+def VLM_inference_two_stage(
+    task_type: str,
+    query_image: str | Path,
+    *,
+    query: str | None = None,
+    stage_one_max_new_tokens: int = INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    stage_two_max_new_tokens: int = INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+) -> dict[str, Any]:
+    """Run gated two-stage InspecSafe classification without retrieval."""
+    from two_stage_inference import run_two_stage_safety_inference
+
+    task_type = _validate_task_type(task_type)
+    if task_type != SAFETY_JUDGEMENT_TASK:
+        raise ValueError(
+            "Two-stage inference currently supports only 'safety judgement'."
+        )
+
+    query = query or _default_query_for_task(task_type)
+    image_path = _resolve_query_image_path(query_image)
+    result = run_two_stage_safety_inference(
+        image_path,
+        query,
+        _run_vlm,
+        stage_one_max_new_tokens=stage_one_max_new_tokens,
+        stage_two_max_new_tokens=stage_two_max_new_tokens,
+    )
+    prompts = {
+        "stage_one": result["stage_one"]["prompt"],
+        "stage_two": (
+            result["stage_two"]["prompt"] if result["stage_two"] else None
+        ),
+    }
+    return {
+        "task_type": task_type,
+        "query_image": str(image_path),
+        "query": query,
+        "prompt": prompts,
+        **result,
     }
 
 

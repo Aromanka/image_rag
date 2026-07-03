@@ -26,8 +26,9 @@ Skip installation when dependencies are already available. Replace
 These checks do not load the local models.
 
 ```bash
-python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retriever.py vlm_inference.py
+python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retriever.py two_stage_inference.py vlm_inference.py evaluate_inspecsafe.py
 python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety judgement'))"
+python -m unittest test_two_stage_inference.py
 ```
 
 The printed prompt should contain:
@@ -167,6 +168,11 @@ python evaluate_inspecsafe.py --mode baseline --dataset-csv data/inspecsafe/test
 python evaluate_inspecsafe.py --mode rag --top-k 3 --offset 100 --limit 50
 ```
 
+4. Evaluate the gated two-stage interface
+```bash
+python evaluate_inspecsafe.py --mode two-stage --dataset-csv data/inspecsafe/test.csv --limit 50
+```
+
 ### Run from CLI
 
 ```bash
@@ -189,6 +195,7 @@ curl "http://127.0.0.1:8000/health"
 curl -X POST "http://127.0.0.1:8000/search/query-image" -H "Content-Type: application/json" -d "{\"query_image\":\"$QUERY_IMAGE\",\"top_k\":5}"
 curl -X POST "http://127.0.0.1:8000/vlm/inference" -H "Content-Type: application/json" -d "{\"task_type\":\"safety judgement\",\"query_image\":\"$QUERY_IMAGE\"}"
 curl -X POST "http://127.0.0.1:8000/vlm/rag-inference" -H "Content-Type: application/json" -d "{\"task_type\":\"safety judgement\",\"query_image\":\"$QUERY_IMAGE\",\"top_k\":5}"
+curl -X POST "http://127.0.0.1:8000/vlm/two-stage-inference" -H "Content-Type: application/json" -d "{\"query_image\":\"$QUERY_IMAGE\"}"
 ```
 
 The RAG inference response should include `retrieved`, `prompt`, and `output`.
