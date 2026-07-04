@@ -22,6 +22,47 @@ python evaluate_inspecsafe.py --mode rag --top-k 5 --gated_rag 0.3 --limit 1000 
 python utils/evaluate_rag_details.py /root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json --demo-dir demo/inspecsafe_rag_details --sample-ids 1015 175 1132 61 526 1234
 ```
 
+## Safety-level evaluation
+
+The four-level evaluator consumes the same pipeline JSON format as the
+fine-tuned-model reference scripts. Each sample contains an `image` field and
+an assistant message whose content is a JSON string with
+`scene_description`, `hazards`, and `overall_safety_level`.
+
+```bash
+# Baseline (query image only)
+python evaluate_inspecsafe_safety_level.py \
+  --mode baseline \
+  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --image-root /root/autodl-tmp/pipeline_images
+
+# Image RAG
+python evaluate_inspecsafe_safety_level.py \
+  --mode rag \
+  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --image-root /root/autodl-tmp/pipeline_images \
+  --top-k 5 \
+  --gated_rag 0.3
+```
+
+The result JSON reports the same metric set as the reference evaluator:
+JSON parse rate; safety-level accuracy; per-level and macro/micro precision,
+recall, and F1; hazard micro precision/recall/F1; and scene-description SBERT
+similarity. The default SBERT path is `SBERT_MODEL_PATH` from `config.py`.
+Pass `--skip-scene-metrics` when the local SBERT snapshot is unavailable.
+
+Saved outputs can be rescored without rerunning the VLM:
+
+```bash
+python utils/evaluate_utils.py save/eval_results_inspecsafe_safety_level_rag_*.json \
+  --dataset-type inspecsafe_safety_level \
+  --sbert-path /root/autodl-tmp/all-MiniLM-L6-v2
+```
+
+The shared `/vlm/inference` and `/vlm/rag-inference` APIs also accept
+`"task_type": "safety level"`. Existing `"safety judgement"` requests retain
+their binary safe/unsafe behavior.
+
 InspecSafe RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json`
 constructionsite RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_constructionsite10k_rag_1781160915.json`
 

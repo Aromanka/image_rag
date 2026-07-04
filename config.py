@@ -21,6 +21,7 @@ MAX_TOP_K = 50
 GATED_RAG = 0.0
 
 SAFETY_JUDGEMENT_TASK = "safety judgement"
+SAFETY_LEVEL_TASK = "safety level"
 CONSTRUCTIONSITE10K_TASK = "constructionsite10k"
 LAB_SAFETY_TASK = "lab_safety"
 LAB_SAFETY_GEN_TASK = "lab_safety_gen"
@@ -39,6 +40,7 @@ SUPPORTED_RAG_DATASETS = {
 
 TASK_TO_RAG_DATASET = {
     SAFETY_JUDGEMENT_TASK: INSPECSAFE_DATASET,
+    SAFETY_LEVEL_TASK: INSPECSAFE_DATASET,
     CONSTRUCTIONSITE10K_TASK: CONSTRUCTIONSITE10K_DATASET,
     LAB_SAFETY_TASK: LAB_SAFETY_DATASET,
     LAB_SAFETY_GEN_TASK: LAB_SAFETY_GEN_DATASET,
@@ -46,11 +48,13 @@ TASK_TO_RAG_DATASET = {
 
 SUPPORTED_TASK_TYPES = {
     SAFETY_JUDGEMENT_TASK,
+    SAFETY_LEVEL_TASK,
     CONSTRUCTIONSITE10K_TASK,
     LAB_SAFETY_TASK,
     LAB_SAFETY_GEN_TASK,
 }
 DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
+DEFAULT_SAFETY_LEVEL_QUERY = "Assess the safety level of this inspection image."
 DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 DEFAULT_LAB_SAFETY_QUERY = "Answer the lab safety multiple-choice question."
 DEFAULT_LAB_SAFETY_GEN_QUERY = "Classify this laboratory scene as hazardous or non-hazardous."
@@ -62,6 +66,10 @@ VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
+
+# The structured InspecSafe safety-level response includes a scene description,
+# hazard list, and four-level classification.
+INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS = 384
 
 # Two-stage InspecSafe inference limits. The first pass is deliberately short
 # because it is only a gate; the second pass runs only after an unsafe result.

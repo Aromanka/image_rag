@@ -11,6 +11,7 @@ sentence-transformers
 torch>=2.0
 torchvision
 timm
+tqdm
 transformers>=4.50.0,<5.0
 uvicorn
 sentence-transformer

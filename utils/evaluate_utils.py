@@ -10,6 +10,7 @@ from typing import Any
 
 
 DEFAULT_CONSTRUCTIONSITE10K_SBERT_PATH = "/root/autodl-tmp/all-MiniLM-L6-v2"
+INSPECSAFE_SAFETY_LEVELS = ["Level I", "Level II", "Level III", "Level IV"]
 
 
 def extract_label(output: str | None) -> str | None:
@@ -179,6 +180,357 @@ def evaluate_results_json(
     else:
         target_path = source_path
 
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2, ensure_ascii=False, default=str)
+
+    return data
+
+
+def extract_inspecsafe_safety_level_json(
+    output: str | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Extract the first complete JSON object from a safety-level response."""
+    if isinstance(output, dict):
+        return output
+    if not output:
+        return None
+
+    text = str(output)
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    for index, character in enumerate(text[start:], start=start):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth != 0:
+                continue
+
+            blob = text[start : index + 1]
+            try:
+                parsed = json.loads(blob)
+            except (json.JSONDecodeError, TypeError):
+                repaired = blob.replace("'", '"')
+                repaired = re.sub(r",\s*}", "}", repaired)
+                repaired = re.sub(r",\s*]", "]", repaired)
+                try:
+                    parsed = json.loads(repaired)
+                except (json.JSONDecodeError, TypeError):
+                    return None
+            return parsed if isinstance(parsed, dict) else None
+
+    return None
+
+
+def normalize_inspecsafe_safety_level(value: Any) -> str | None:
+    """Normalize Roman numerals, numbers, or words to ``Level I``-``IV``."""
+    if value is None or str(value).strip() == "":
+        return None
+
+    match = re.search(
+        r"(IV|III|II|I|[1-4]|one|two|three|four)",
+        str(value),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    token = match.group(1).lower()
+    return {
+        "i": "Level I",
+        "1": "Level I",
+        "one": "Level I",
+        "ii": "Level II",
+        "2": "Level II",
+        "two": "Level II",
+        "iii": "Level III",
+        "3": "Level III",
+        "three": "Level III",
+        "iv": "Level IV",
+        "4": "Level IV",
+        "four": "Level IV",
+    }.get(token)
+
+
+def inspecsafe_hazard_set(label: dict[str, Any] | None) -> set[str]:
+    """Return normalized hazard phrases from a parsed InspecSafe label."""
+    if not label:
+        return set()
+    hazards = label.get("hazards", [])
+    if not isinstance(hazards, list):
+        return set()
+    return {str(hazard).strip().lower() for hazard in hazards if str(hazard).strip()}
+
+
+def _inspecsafe_ground_truth(sample: dict[str, Any]) -> dict[str, Any]:
+    for key in ("ground_truth", "ground_truth_output", "gt"):
+        parsed = extract_inspecsafe_safety_level_json(sample.get(key))
+        if parsed is not None:
+            return parsed
+    return {}
+
+
+def _scene_sbert_similarity(
+    ground_truth_descriptions: list[str],
+    predicted_descriptions: list[str],
+    sbert_path: str | Path | None,
+) -> float | None:
+    if not sbert_path or not Path(sbert_path).is_dir() or not ground_truth_descriptions:
+        return None
+
+    try:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer(str(sbert_path))
+        ground_truth_embeddings = model.encode(
+            ground_truth_descriptions,
+            convert_to_tensor=True,
+            show_progress_bar=False,
+        )
+        predicted_embeddings = model.encode(
+            predicted_descriptions,
+            convert_to_tensor=True,
+            show_progress_bar=False,
+        )
+        similarities = torch.nn.functional.cosine_similarity(
+            ground_truth_embeddings,
+            predicted_embeddings,
+        )
+        return float(similarities.mean().cpu().item())
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        print(f"  (SBERT unavailable: {exc})")
+        return None
+
+
+def evaluate_inspecsafe_safety_level_results_json(
+    results_json: str | Path | dict[str, Any] | list[dict[str, Any]],
+    output_json: str | Path | None = None,
+    *,
+    compute_scene_metrics: bool = True,
+    sbert_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Score InspecSafe four-level JSON outputs with the reference metrics.
+
+    Metrics intentionally match ``.plan/reference/inspecsafe_eval_utils.py``:
+    JSON parse rate, level accuracy and per-level/macro/micro P/R/F1, hazard
+    micro P/R/F1, and optional scene-description SBERT similarity.
+    """
+    source_path: Path | None = None
+    if isinstance(results_json, (str, Path)):
+        source_path = Path(results_json)
+        with source_path.open("r", encoding="utf-8") as file:
+            payload: dict[str, Any] | list[dict[str, Any]] = json.load(file)
+    else:
+        payload = results_json
+
+    if isinstance(payload, list):
+        data: dict[str, Any] = {"results": payload}
+    elif isinstance(payload, dict):
+        data = payload
+    else:
+        raise TypeError("results_json must be a path, dict, or list of dictionaries.")
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Results JSON must contain a 'results' list.")
+
+    level_tp = {level: 0 for level in INSPECSAFE_SAFETY_LEVELS}
+    level_fp = {level: 0 for level in INSPECSAFE_SAFETY_LEVELS}
+    level_fn = {level: 0 for level in INSPECSAFE_SAFETY_LEVELS}
+    level_counts = {level: 0 for level in INSPECSAFE_SAFETY_LEVELS}
+    level_correct_counts = {level: 0 for level in INSPECSAFE_SAFETY_LEVELS}
+    parse_ok_count = 0
+    level_correct = 0
+    hazard_tp = hazard_fp = hazard_fn = 0
+    ground_truth_descriptions: list[str] = []
+    predicted_descriptions: list[str] = []
+
+    for sample in results:
+        if not isinstance(sample, dict):
+            ground_truth_descriptions.append("")
+            predicted_descriptions.append("")
+            continue
+
+        ground_truth = _inspecsafe_ground_truth(sample)
+        prediction = (
+            None
+            if sample.get("error")
+            else extract_inspecsafe_safety_level_json(
+                sample.get("output") or sample.get("raw_output")
+            )
+        )
+        if prediction is not None:
+            parse_ok_count += 1
+
+        ground_truth_level = normalize_inspecsafe_safety_level(
+            ground_truth.get("overall_safety_level")
+        )
+        predicted_level = normalize_inspecsafe_safety_level(
+            prediction.get("overall_safety_level") if prediction else None
+        )
+        sample["ground_truth"] = ground_truth
+        sample["predicted"] = prediction
+        sample["gt_level"] = ground_truth_level
+        sample["pred_level"] = predicted_level
+        sample["parse_failed"] = prediction is None
+
+        if ground_truth_level in level_counts:
+            level_counts[ground_truth_level] += 1
+        if ground_truth_level is not None and ground_truth_level == predicted_level:
+            level_correct += 1
+            level_correct_counts[ground_truth_level] += 1
+
+        for level in INSPECSAFE_SAFETY_LEVELS:
+            ground_truth_positive = ground_truth_level == level
+            predicted_positive = predicted_level == level
+            if ground_truth_positive and predicted_positive:
+                level_tp[level] += 1
+            elif predicted_positive and not ground_truth_positive:
+                level_fp[level] += 1
+            elif ground_truth_positive and not predicted_positive:
+                level_fn[level] += 1
+
+        ground_truth_hazards = inspecsafe_hazard_set(ground_truth)
+        predicted_hazards = inspecsafe_hazard_set(prediction)
+        hazard_tp += len(ground_truth_hazards & predicted_hazards)
+        hazard_fp += len(predicted_hazards - ground_truth_hazards)
+        hazard_fn += len(ground_truth_hazards - predicted_hazards)
+
+        ground_truth_descriptions.append(str(ground_truth.get("scene_description", "")))
+        predicted_descriptions.append(
+            str(prediction.get("scene_description", "")) if prediction else ""
+        )
+
+        if sample.get("error"):
+            sample["status"] = "ERROR"
+        elif prediction is None:
+            sample["status"] = "PARSE_FAIL"
+        elif ground_truth_level is None:
+            sample["status"] = "SKIP"
+        elif predicted_level == ground_truth_level:
+            sample["status"] = "CORRECT"
+        else:
+            sample["status"] = "WRONG"
+
+    per_level: dict[str, dict[str, int | float]] = {}
+    for level in INSPECSAFE_SAFETY_LEVELS:
+        true_positive = level_tp[level]
+        false_positive = level_fp[level]
+        false_negative = level_fn[level]
+        precision = (
+            true_positive / (true_positive + false_positive)
+            if true_positive + false_positive
+            else 0.0
+        )
+        recall = (
+            true_positive / (true_positive + false_negative)
+            if true_positive + false_negative
+            else 0.0
+        )
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
+        count = level_counts[level]
+        per_level[level] = {
+            "n": count,
+            "acc": level_correct_counts[level] / count if count else 0.0,
+            "tp": true_positive,
+            "fp": false_positive,
+            "fn": false_negative,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+
+    active_levels = [
+        level for level in INSPECSAFE_SAFETY_LEVELS if level_counts[level] > 0
+    ]
+    active_count = len(active_levels)
+    macro_precision = (
+        sum(float(per_level[level]["precision"]) for level in active_levels)
+        / active_count
+        if active_count
+        else 0.0
+    )
+    macro_recall = (
+        sum(float(per_level[level]["recall"]) for level in active_levels)
+        / active_count
+        if active_count
+        else 0.0
+    )
+    macro_f1 = (
+        sum(float(per_level[level]["f1"]) for level in active_levels) / active_count
+        if active_count
+        else 0.0
+    )
+
+    total_level_tp = sum(level_tp.values())
+    total_level_fp = sum(level_fp.values())
+    total_level_fn = sum(level_fn.values())
+    micro_precision = (
+        total_level_tp / (total_level_tp + total_level_fp)
+        if total_level_tp + total_level_fp
+        else 0.0
+    )
+    micro_recall = (
+        total_level_tp / (total_level_tp + total_level_fn)
+        if total_level_tp + total_level_fn
+        else 0.0
+    )
+    micro_f1 = (
+        2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+        if micro_precision + micro_recall
+        else 0.0
+    )
+
+    hazard_precision = (
+        hazard_tp / (hazard_tp + hazard_fp) if hazard_tp + hazard_fp else 0.0
+    )
+    hazard_recall = (
+        hazard_tp / (hazard_tp + hazard_fn) if hazard_tp + hazard_fn else 0.0
+    )
+    hazard_f1 = (
+        2 * hazard_precision * hazard_recall / (hazard_precision + hazard_recall)
+        if hazard_precision + hazard_recall
+        else 0.0
+    )
+
+    sample_count = len(results)
+    scene_sbert_sim = (
+        _scene_sbert_similarity(
+            ground_truth_descriptions,
+            predicted_descriptions,
+            sbert_path,
+        )
+        if compute_scene_metrics
+        else None
+    )
+    data["summary"] = {
+        "n_samples": sample_count,
+        "json_parse_rate": parse_ok_count / sample_count if sample_count else 0.0,
+        "level_accuracy": level_correct / sample_count if sample_count else 0.0,
+        "per_level": per_level,
+        "level_macro_p": macro_precision,
+        "level_macro_r": macro_recall,
+        "level_macro_f1": macro_f1,
+        "level_micro_p": micro_precision,
+        "level_micro_r": micro_recall,
+        "level_micro_f1": micro_f1,
+        "hazard_precision": hazard_precision,
+        "hazard_recall": hazard_recall,
+        "hazard_f1": hazard_f1,
+        "scene_sbert_sim": scene_sbert_sim,
+    }
+
+    target_path = Path(output_json) if output_json is not None else source_path
     if target_path is not None:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with target_path.open("w", encoding="utf-8") as file:
@@ -659,6 +1011,7 @@ def _parse_args() -> argparse.Namespace:
         choices=[
             "auto",
             "inspecsafe",
+            "inspecsafe_safety_level",
             "constructionsite10k",
             "lab_safety",
             "lab_safety_gen",
@@ -680,18 +1033,30 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip ROUGE-L and SBERT metrics for ConstructionSite-10K.",
     )
+    parser.add_argument(
+        "--skip-scene-metrics",
+        action="store_true",
+        help="Skip SBERT scene-description similarity for InspecSafe safety levels.",
+    )
     return parser.parse_args()
 
 
 def _detect_results_type(results_json: Path) -> str:
     with results_json.open("r", encoding="utf-8") as file:
         payload = json.load(file)
+    if isinstance(payload, dict):
+        metadata = payload.get("metadata", {})
+        if isinstance(metadata, dict) and metadata.get("task_type") == "safety level":
+            return "inspecsafe_safety_level"
     results = payload.get("results", []) if isinstance(payload, dict) else payload
     if isinstance(results, list) and results:
         first = results[0]
         if isinstance(first, dict):
             if "ground_truth_hazard_label" in first:
                 return "lab_safety_gen"
+            ground_truth = first.get("ground_truth")
+            if isinstance(ground_truth, dict) and "overall_safety_level" in ground_truth:
+                return "inspecsafe_safety_level"
             if "ground_truth_answer" in first:
                 return "lab_safety"
             if "ground_truth_output" in first:
@@ -727,6 +1092,22 @@ if __name__ == "__main__":
         print(f"Micro F1:       {summary['micro_f1']:.4f}")
         print(f"Avg ROUGE-L:    {summary['avg_rouge_l']:.4f}")
         print(f"Avg SBERT sim:  {summary['avg_sbert_sim']:.4f}")
+    elif dataset_type == "inspecsafe_safety_level":
+        evaluated = evaluate_inspecsafe_safety_level_results_json(
+            args.results_json,
+            args.output_json,
+            compute_scene_metrics=not args.skip_scene_metrics,
+            sbert_path=args.sbert_path,
+        )
+        summary = evaluated["summary"]
+        print(f"Samples:         {summary['n_samples']}")
+        print(f"JSON parse rate: {summary['json_parse_rate']:.4f}")
+        print(f"Level accuracy:  {summary['level_accuracy']:.4f}")
+        print(f"Level macro F1:  {summary['level_macro_f1']:.4f}")
+        print(f"Level micro F1:  {summary['level_micro_f1']:.4f}")
+        print(f"Hazard F1:       {summary['hazard_f1']:.4f}")
+        if summary["scene_sbert_sim"] is not None:
+            print(f"Scene SBERT sim:  {summary['scene_sbert_sim']:.4f}")
     elif dataset_type == "lab_safety":
         evaluated = evaluate_labsafety_results_json(args.results_json, args.output_json)
         summary = evaluated["summary"]

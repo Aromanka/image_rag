@@ -12,6 +12,7 @@ from typing import Any
 from config import (
     CONSTRUCTIONSITE10K_TASK,
     DEFAULT_SAFETY_QUERY,
+    DEFAULT_SAFETY_LEVEL_QUERY,
     DEFAULT_CONSTRUCTIONSITE10K_QUERY,
     DEFAULT_LAB_SAFETY_GEN_QUERY,
     DEFAULT_LAB_SAFETY_QUERY,
@@ -22,6 +23,7 @@ from config import (
     INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     PROJECT_ROOT,
     SAFETY_JUDGEMENT_TASK,
+    SAFETY_LEVEL_TASK,
     SUPPORTED_TASK_TYPES,
     TASK_TO_RAG_DATASET,
     TOP_K,
@@ -43,6 +45,8 @@ INTERNVL_IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
 
 def _validate_task_type(task_type: str) -> str:
     normalized = task_type.strip().lower()
+    if normalized in {"safety_level", "safety-level"}:
+        normalized = SAFETY_LEVEL_TASK
     if normalized not in SUPPORTED_TASK_TYPES:
         supported = ", ".join(sorted(SUPPORTED_TASK_TYPES))
         raise ValueError(f"Unsupported task_type '{task_type}'. Supported: {supported}.")
@@ -57,6 +61,8 @@ def _default_query_for_task(task_type: str) -> str:
         return DEFAULT_LAB_SAFETY_QUERY
     if task_type == LAB_SAFETY_GEN_TASK:
         return DEFAULT_LAB_SAFETY_GEN_QUERY
+    if task_type == SAFETY_LEVEL_TASK:
+        return DEFAULT_SAFETY_LEVEL_QUERY
     return DEFAULT_SAFETY_QUERY
 
 
@@ -513,6 +519,14 @@ Question for the query image:
 Question for the query image:
 {query}
 """
+    if task_type == SAFETY_LEVEL_TASK:
+        from rag_answer import INSPECSAFE_SAFETY_LEVEL_SYSTEM_PROMPT
+
+        return f"""{INSPECSAFE_SAFETY_LEVEL_SYSTEM_PROMPT}
+
+Question for the query image:
+{query}
+"""
 
     return f"""You are a construction safety visual inspection assistant.
 
@@ -603,6 +617,7 @@ def VLM_inference_with_RAG(
     """Retrieve similar examples, build a RAG prompt, and run the configured VLM."""
     from rag_answer import (
         build_constructionsite10k_rag_messages,
+        build_inspecsafe_safety_level_rag_messages,
         build_labsafety_gen_rag_messages,
         build_labsafety_rag_messages,
         build_rag_messages,
@@ -631,6 +646,10 @@ def VLM_inference_with_RAG(
         messages = build_labsafety_rag_messages(query, image_path, retrieved)
     elif task_type == LAB_SAFETY_GEN_TASK:
         messages = build_labsafety_gen_rag_messages(query, image_path, retrieved)
+    elif task_type == SAFETY_LEVEL_TASK:
+        messages = build_inspecsafe_safety_level_rag_messages(
+            query, image_path, retrieved
+        )
     else:
         messages = build_rag_messages(query, image_path, retrieved)
     output = _run_vlm_messages(messages, max_new_tokens=max_new_tokens)

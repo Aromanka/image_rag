@@ -1,9 +1,75 @@
 """Build safety reasoning prompts from retrieved historical examples."""
 
+import re
 from pathlib import Path
 from typing import Any
 
 from config import GATED_RAG, PROJECT_ROOT, TOP_K
+
+
+INSPECSAFE_SAFETY_LEVEL_SYSTEM_PROMPT = """You are an industrial safety inspector reviewing footage from an autonomous inspection robot deployed at an oil and gas / petrochemical facility.
+
+Carefully analyse the provided image and assess the safety situation step by step. Industrial inspection scenes frequently contain hazards; examine ALL personnel, equipment, and the surrounding environment. Do NOT assume the scene is safe without thorough inspection.
+
+## Safety Level Criteria (Oil & Gas / Chemical)
+
+Level I  - CRITICAL (most severe, immediate threat):
+    Open flame, smoke, worker not wearing hard hat, worker not wearing gloves,
+    worker not wearing mask, smoking, personnel collapse, oil leakage.
+
+Level II - MODERATE hazard:
+    Water pooling, worker using a mobile phone.
+
+Level III - MINOR / potential risk:
+    Foreign objects present in the area.
+
+Level IV - NORMAL:
+    No safety factors observed.
+
+When multiple hazards co-exist, the overall safety level is determined by the MOST severe hazard present.
+
+## Instructions
+
+Step 1 - Scene Description: Describe the scene, key equipment, personnel, and observed conditions.
+Step 2 - Hazard Analysis: Identify each hazard present using the canonical phrases below.
+Step 3 - Output the following JSON only, no extra text:
+
+{
+  "scene_description": "<detailed scene description>",
+  "hazards": ["<hazard 1>", "<hazard 2>"],
+  "overall_safety_level": "<Level I | Level II | Level III | Level IV>"
+}
+
+Use exactly these canonical hazard phrases when applicable: "open flame", "smoke",
+"smoking", "no hard hat", "no gloves", "no mask", "personnel collapse", "oil leakage",
+"water pooling", "using mobile phone", "foreign objects".
+If no safety factors are present, return an empty hazards list and "Level IV"."""
+
+
+def _inspecsafe_reference_level(item: dict[str, Any]) -> str:
+    explicit_level = (
+        item.get("overall_safety_level")
+        or item.get("safety_level")
+        or item.get("level")
+    )
+    if explicit_level:
+        return str(explicit_level)
+
+    # Existing binary indexes still retain source paths such as ``Level01``.
+    # Recover that annotation so they can support safety-level RAG immediately.
+    match = re.search(
+        r"level[\s_-]*0?([1-4])",
+        str(item.get("image_path", "")),
+        re.IGNORECASE,
+    )
+    if match:
+        return {
+            "1": "Level I",
+            "2": "Level II",
+            "3": "Level III",
+            "4": "Level IV",
+        }[match.group(1)]
+    return str(item.get("safe_label", ""))
 
 
 LAB_SAFETY_SYSTEM_PROMPT = """You are a laboratory safety expert reviewing images from a lab safety training dataset.
@@ -186,6 +252,47 @@ def build_rag_messages(
             "content": "You are a construction safety visual inspection assistant. "
             "Use the reference images to inform your judgement of the query image.",
         },
+        {"role": "user", "content": content},
+    ]
+
+
+def build_inspecsafe_safety_level_rag_messages(
+    query: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build multi-image InspecSafe messages for four-level safety scoring."""
+    content: list[dict[str, str]] = []
+
+    for index, item in enumerate(retrieved_items, start=1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+
+        level = _inspecsafe_reference_level(item)
+        hazards = item.get("hazards", "")
+        reference_text = [
+            f"Reference {index} scene: {item.get('scene_description') or item.get('caption', '')}",
+            f"Reference label: {level}",
+        ]
+        if hazards:
+            reference_text.append(f"Reference hazards: {hazards}")
+
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({"type": "text", "text": "\n".join(reference_text)})
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            f"Query image task: {query}\n"
+            "Use the references only as supporting examples. Inspect and classify "
+            "ONLY the query image. Return the required JSON object only."
+        ),
+    })
+
+    return [
+        {"role": "system", "content": INSPECSAFE_SAFETY_LEVEL_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 

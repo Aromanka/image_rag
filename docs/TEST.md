@@ -26,10 +26,12 @@ Skip installation when dependencies are already available. Replace
 These checks do not load the local models.
 
 ```bash
-python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retrieval_gating.py retriever.py two_stage_inference.py vlm_inference.py evaluate_inspecsafe.py
+python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retrieval_gating.py retriever.py two_stage_inference.py vlm_inference.py evaluate_inspecsafe.py evaluate_inspecsafe_safety_level.py
 python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety judgement'))"
+python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety level'))"
 python -m unittest test_two_stage_inference.py
 python -m unittest test_retrieval_gating.py
+python -m unittest test_inspecsafe_safety_level.py
 ```
 
 The printed prompt should contain:
@@ -172,6 +174,17 @@ python evaluate_inspecsafe.py --mode rag --top-k 3 --gated_rag 0.3 --offset 100 
 4. Evaluate the gated two-stage interface
 ```bash
 python evaluate_inspecsafe.py --mode two-stage --dataset-csv data/inspecsafe/test.csv --limit 50
+```
+
+5. Evaluate Level I-IV classification and structured hazard output
+
+```bash
+python evaluate_inspecsafe_safety_level.py \
+  --mode rag \
+  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --image-root /root/autodl-tmp/pipeline_images \
+  --top-k 5 \
+  --limit 50
 ```
 
 ### Run from CLI

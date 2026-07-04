@@ -124,6 +124,7 @@ similarity >= gated_rag
 | 数据集/任务 | `task_type` | 输入与目标 | RAG 输出要求 | 主要评估指标 |
 |---|---|---|---|---|
 | InspecSafe-V1 | `safety judgement` | 施工图像；`safe` / `unsafe` | 观察、参考证据、推理、最终标签 | Accuracy、TP/FP/TN/FN |
+| InspecSafe-V1 Safety Level | `safety level` | 巡检图像；Level I-IV、危险项与场景描述 | 结构化 JSON | Level Accuracy、Macro/Micro F1、Hazard F1、SBERT |
 | ConstructionSite-10K | `constructionsite10k` | 施工图像；规则 1–4 违规集合 | 严格 JSON：场景 annotation 与 violations | Exact Match、safe/unsafe、宏/微 P/R/F1、ROUGE-L、SBERT |
 | Lab Safety | `lab_safety` | 实验室图像与多项选择题；A/B/C/D | 仅输出一个大写选项字母 | Accuracy、解析失败数、混淆矩阵 |
 | LabSafety-v1 Generated | `lab_safety_gen` | 合成实验室图像；`hazardous` / `non-hazardous` | 观察、检索证据、推理、最终标签 | Accuracy、TP/FP/TN/FN、Hazard F1 |
@@ -472,6 +473,12 @@ python evaluate_inspecsafe.py \
   --dataset-csv data/inspecsafe/test.csv \
   --mode two-stage
 
+# InspecSafe Safety Level（参考 pipeline JSON 格式）
+python evaluate_inspecsafe_safety_level.py \
+  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --image-root /root/autodl-tmp/pipeline_images \
+  --mode rag --top-k 5 --gated_rag 0.3
+
 # ConstructionSite-10K
 python evaluate_constructionsite10k.py \
   --dataset-json constructionsite_10k/test.json \
@@ -526,6 +533,7 @@ Image_RAG/
 ├── two_stage_inference.py          # InspecSafe 两阶段决策策略
 ├── vlm_inference.py               # 多后端 VLM 推理
 ├── evaluate_inspecsafe.py
+├── evaluate_inspecsafe_safety_level.py
 ├── evaluate_constructionsite10k.py
 ├── evaluate_labsafety.py
 ├── evaluate_labsafety_gen.py
