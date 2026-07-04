@@ -23,7 +23,7 @@ python build_index.py --lab-safety-gen-jsonl data/lab_safety_gen/annotations.jso
 
 2. Evaluate
 ```bash
-python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode rag
+python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode rag --gated_rag 0.3
 python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode baseline
 ```
 
@@ -44,7 +44,8 @@ python utils/evaluate_rag_details.py save/eval_results_labsafety_gen_rag_1782311
   "task_type": "lab_safety_gen",
   "query_image": "data/lab_safety_gen/images/test/<image_id>.png",
   "query": "Classify this laboratory scene as hazardous or non-hazardous.",
-  "top_k": 5
+  "top_k": 5,
+  "gated_rag": 0.3
 }
 ```
 

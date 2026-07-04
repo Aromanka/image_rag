@@ -5,7 +5,7 @@ python build_index.py --lab-safety-json data/lab_safety/lab_train.json
 
 2. evaluate
 ```bash
-python evaluate_labsafety.py --dataset-json data/lab_safety/lab_test.json --mode rag
+python evaluate_labsafety.py --dataset-json data/lab_safety/lab_test.json --mode rag --gated_rag 0.3
 python evaluate_labsafety.py --dataset-json data/lab_safety/lab_test.json --mode baseline
 ```
 

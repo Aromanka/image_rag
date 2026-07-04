@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from config import (
+    GATED_RAG,
     INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     PROJECT_ROOT,
@@ -36,6 +37,7 @@ def run_evaluation(
     stage_two_max_new_tokens: int,
     limit: int | None,
     offset: int,
+    gated_rag: float = GATED_RAG,
 ) -> None:
     from vlm_inference import (
         VLM_inference,
@@ -60,7 +62,10 @@ def run_evaluation(
     errors = 0
     results = []
 
-    print(f"Evaluating {total} samples | mode={mode} | top_k={top_k}")
+    print(
+        f"Evaluating {total} samples | mode={mode} | top_k={top_k} "
+        f"| gated_rag={gated_rag}"
+    )
     print("-" * 60)
 
     start_time = time.time()
@@ -105,6 +110,7 @@ def run_evaluation(
                     "safety judgement",
                     image_path,
                     top_k=top_k,
+                    gated_rag=gated_rag,
                     max_new_tokens=max_new_tokens,
                 )
 
@@ -162,6 +168,7 @@ def run_evaluation(
             "dataset_csv": str(dataset_csv),
             "mode": mode,
             "top_k": top_k,
+            "gated_rag": gated_rag,
             "max_new_tokens": max_new_tokens,
             "stage_one_max_new_tokens": stage_one_max_new_tokens,
             "stage_two_max_new_tokens": stage_two_max_new_tokens,
@@ -220,6 +227,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--gated-rag",
+        "--gated_rag",
+        dest="gated_rag",
+        type=float,
+        default=GATED_RAG,
+        help="Keep top-k RAG results with cosine similarity >= this threshold.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument(
         "--stage-one-max-new-tokens",
@@ -254,6 +269,7 @@ if __name__ == "__main__":
         dataset_csv=args.dataset_csv,
         mode=args.mode,
         top_k=args.top_k,
+        gated_rag=args.gated_rag,
         max_new_tokens=args.max_new_tokens,
         stage_one_max_new_tokens=args.stage_one_max_new_tokens,
         stage_two_max_new_tokens=args.stage_two_max_new_tokens,

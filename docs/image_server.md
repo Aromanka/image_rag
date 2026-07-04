@@ -33,8 +33,8 @@ longer overwrite each other.
 ## 2. Start one server process
 
 ```bash
-python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset inspecsafe --top-k 5
-python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset constructionsite10k --top-k 3
+python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset inspecsafe --top-k 5 --gated_rag 0.3
+python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset constructionsite10k --top-k 3 --gated_rag 0.3
 ```
 
 Model loading happens during startup. Wait for `Model loading complete. Server is ready.`
@@ -75,8 +75,10 @@ curl --data-binary @query.jpg -H "Content-Type: image/jpeg" "http://SERVER_IP:80
 curl --data-binary @query.png -H "Content-Type: image/png" "http://SERVER_IP:8000/infer?dataset=lab_safety_gen"
 ```
 
-An optional `top_k` query parameter overrides the server default, for example
-`/infer?dataset=inspecsafe&top_k=3`.
+Optional `top_k` and `gated_rag` query parameters override the server defaults,
+for example `/infer?dataset=inspecsafe&top_k=3&gated_rag=0.3`. The server first
+retrieves `top_k`, then removes items whose cosine similarity is below
+`gated_rag`. The default threshold is `0`, and zero remaining items is valid.
 
 The response body contains the model output and the complete request latency:
 
@@ -84,7 +86,10 @@ The response body contains the model output and the complete request latency:
 {
   "dataset": "inspecsafe",
   "response": "Query image observations: ...",
-  "response_time_seconds": 2.731
+  "response_time_seconds": 2.731,
+  "gated_rag": 0.3,
+  "retrieved_count_before_gate": 5,
+  "retrieved_count": 2
 }
 ```
 

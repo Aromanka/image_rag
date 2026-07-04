@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from config import (
     CONSTRUCTIONSITE10K_TASK,
+    GATED_RAG,
     DEFAULT_CONSTRUCTIONSITE10K_QUERY,
     PROJECT_ROOT,
     SBERT_MODEL_PATH,
@@ -103,6 +104,7 @@ def run_evaluation(
     image_root: Path | None,
     sbert_path: str | Path | None,
     skip_annotation_metrics: bool,
+    gated_rag: float = GATED_RAG,
 ) -> None:
     from vlm_inference import VLM_inference, VLM_inference_with_RAG
 
@@ -110,7 +112,10 @@ def run_evaluation(
     if not samples:
         sys.exit("No samples to evaluate after applying offset/limit.")
 
-    print(f"Evaluating {len(samples)} ConstructionSite-10K samples | mode={mode}")
+    print(
+        f"Evaluating {len(samples)} ConstructionSite-10K samples | mode={mode} "
+        f"| top_k={top_k} | gated_rag={gated_rag}"
+    )
     print("-" * 60)
 
     results: list[dict[str, Any]] = []
@@ -140,6 +145,7 @@ def run_evaluation(
                     image_path,
                     query=query,
                     top_k=top_k,
+                    gated_rag=gated_rag,
                     max_new_tokens=max_new_tokens,
                 )
 
@@ -178,6 +184,7 @@ def run_evaluation(
             "dataset_json": str(dataset_json),
             "mode": mode,
             "top_k": top_k,
+            "gated_rag": gated_rag,
             "max_new_tokens": max_new_tokens,
             "limit": limit,
             "offset": offset,
@@ -252,6 +259,14 @@ def parse_args() -> argparse.Namespace:
         help="Inference mode.",
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--gated-rag",
+        "--gated_rag",
+        dest="gated_rag",
+        type=float,
+        default=GATED_RAG,
+        help="Keep top-k RAG results with cosine similarity >= this threshold.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--offset", type=int, default=0)
@@ -278,6 +293,7 @@ if __name__ == "__main__":
         dataset_json=args.dataset_json,
         mode=args.mode,
         top_k=args.top_k,
+        gated_rag=args.gated_rag,
         max_new_tokens=args.max_new_tokens,
         limit=args.limit,
         offset=args.offset,

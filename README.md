@@ -2,7 +2,7 @@
 
 Image_RAG 是一个面向施工现场与实验室安全分析的本地多模态 RAG（Retrieval-Augmented Generation，检索增强生成）系统。系统接收一张待检查图像，使用 SigLIP2 将图像编码为向量，从 ChromaDB 中检索视觉上相似且带有人工标注的历史案例，再将“历史参考图像 + 参考标注 + 查询图像”共同输入视觉语言模型（VLM），完成安全分类、隐患识别、规则判断或多项选择问答。
 
-本仓库以 **InspecSafe-V1 施工安全二分类**为起点，目前已扩展到 ConstructionSite-10K 规则检测、Lab Safety 多项选择问答、合成实验室场景危险分类，并提供索引构建、离线评估、REST API、低开销原始图像推理服务及推理结果转发功能。
+本仓库以 **InspecSafe-V1 施工安全二分类**为起点，目前已扩展到 ConstructionSite-10K 规则检测、Lab Safety 多项选择问答、合成实验室场景危险分类，并提供索引构建、相似度门控 RAG、InspecSafe 两阶段确认推理、离线评估、REST API、低开销原始图像推理服务及推理结果转发功能。
 
 > 项目面向 AutoDL Linux GPU 主机运行。SigLIP2、VLM 和 SBERT 均通过 `config.py` 指向本地模型快照；SigLIP2 加载显式启用 Hugging Face/Transformers 离线模式。
 
@@ -22,11 +22,13 @@ Image_RAG 是一个面向施工现场与实验室安全分析的本地多模态 
 - 使用同一个本地 SigLIP2 模型编码文本、图像和查询图像；
 - 使用 ChromaDB 持久化两类余弦相似度 HNSW 索引；
 - 支持文本到文本、文本到图像、图像到图像以及 RRF 混合检索；
+- 支持在 Top-k 检索后通过 `gated_rag` 余弦相似度阈值过滤参考案例，并允许最终参考数为 0；
 - 将检索到的参考图像作为真实多模态内容块传给 VLM，而不是只传图片路径；
 - 支持 Qwen2.5-VL、Gemma 3 和 InternVL 三类推理后端；
 - 支持四类安全任务和各自独立的提示模板、索引及评估指标；
 - 提供完整 FastAPI 接口和轻量级原始图像字节接口；
 - 支持 Baseline/RAG 对照评估、结果 JSON 保存和案例可视化导出；
+- 支持 InspecSafe 两阶段门控推理，仅在两次判断均为 `unsafe` 时返回隐患 annotation；
 - 支持推理结果异步转发至另一台 HTTP 服务器。
 
 ## 3. 总体架构
@@ -45,8 +47,9 @@ flowchart LR
         Q[查询图像] --> QE[SigLIP2 图像编码]
         QE --> C2
         C2 --> R[Top-k 相似历史案例]
+        R --> G[gated_rag 相似度过滤]
         Q --> P[任务专用多图 Prompt]
-        R --> P
+        G --> P
         P --> V[VLM 推理]
         V --> O[分类、规则 JSON 或答案]
     end
@@ -80,10 +83,11 @@ chroma_db/
 1. 校验任务类型和查询图像路径；
 2. 使用 SigLIP2 编码查询图像；
 3. 在当前任务对应的图像集合中执行 Top-k 视觉近邻搜索；
-4. 读取参考案例的图像、caption、标签和任务专用元数据；
-5. 将参考图像与文本标注交错排列，最后加入查询图像；
-6. 调用任务专用提示模板和 VLM 生成结果；
-7. 返回查询信息、检索案例、完整 prompt/messages 和模型输出。
+4. 计算 `similarity = 1 - cosine distance`，过滤 `similarity < gated_rag` 的结果；
+5. 读取剩余参考案例的图像、caption、标签和任务专用元数据；
+6. 将参考图像与文本标注交错排列，最后加入查询图像；若没有剩余案例，则只使用查询图像；
+7. 调用任务专用提示模板和 VLM 生成结果；
+8. 返回查询信息、过滤后的检索案例、过滤前后数量、完整 prompt/messages 和模型输出。
 
 需要注意：`VLM_inference_with_RAG()` 当前使用的是**图像到图像检索**。文本检索和混合检索是独立 API 能力，`/rag/answer` 只构造基于文本混合检索的提示，不执行 VLM。
 
@@ -104,6 +108,17 @@ RRF_score(d) = Σ 1 / (60 + rank_i(d))
 
 这样可以避免文本集合距离与跨模态图像集合距离的量纲差异。结果还会记录 `matched_by`，说明案例来自 caption、image 或两种检索通道。
 
+### 4.1 Top-k 后相似度门控
+
+所有 RAG 推理入口都支持 `gated_rag`，默认值为 `0`。门控的优先级高于 Top-k：系统先完成 Top-k 排序和截取，再保留满足以下条件的案例：
+
+```text
+similarity = 1 - cosine_distance
+similarity >= gated_rag
+```
+
+阈值相等的案例会被保留。过滤后允许剩余 0 条参考案例，此时 VLM 仍会使用任务提示和查询图像完成推理。返回结果中的 `retrieved` 始终是实际进入 prompt 的案例，并额外包含 `retrieved_count_before_gate`、`retrieved_count` 和 `gated_rag` 便于调试。
+
 ## 5. 支持的数据集与任务
 
 | 数据集/任务 | `task_type` | 输入与目标 | RAG 输出要求 | 主要评估指标 |
@@ -116,6 +131,8 @@ RRF_score(d) = Σ 1 / (60 + rank_i(d))
 ### 5.1 InspecSafe-V1
 
 最初的核心任务。训练样本需要提供图像 caption 与 `safe`/`unsafe` 标签。RAG prompt 会显示每张参考图像、caption 和历史标签，并要求模型只对最后的查询图像分类。
+
+InspecSafe 还提供两阶段确认推理：第一阶段最多生成 8 个新 token，只请求 `safe` 或 `unsafe`；仅当第一阶段为 `unsafe` 时执行第二阶段。第二阶段最多生成 128 个新 token，并返回简短 annotation 与再次判断。只有两阶段均判断为 `unsafe` 时最终结果才是 `unsafe` 并保留 annotation，其他情况均归一化为 `safe` 且 annotation 为空。
 
 CSV 至少包含：
 
@@ -152,8 +169,10 @@ id,image_path,caption,safe_label
 | `embedding.py` | 本地 SigLIP2 加载；文本/图像批量编码；特征 L2 归一化；离线模式控制 |
 | `build_index.py` | 解析四种数据格式，批量生成向量并建立 ChromaDB 索引 |
 | `retriever.py` | 四类检索、Top-k 校验、数据集索引选择、结果格式化与调试图片复制 |
+| `retrieval_gating.py` | Top-k 后余弦相似度门控、阈值校验与过滤结果标准化 |
 | `rag_answer.py` | 通用和任务专用多图 RAG messages/prompt 构造 |
-| `vlm_inference.py` | VLM 后端选择、Baseline/RAG 推理入口、模型缓存与批量 CLI |
+| `two_stage_inference.py` | 可独立测试的 InspecSafe 两阶段提示、标签解析和门控决策策略 |
+| `vlm_inference.py` | VLM 后端选择、Baseline/RAG/两阶段推理入口、模型缓存与批量 CLI |
 | `app.py` | 完整 JSON FastAPI：检索、prompt 构造和 VLM 推理 |
 | `image_server.py` | 接收原始图片字节的轻量服务；预加载、串行 GPU 推理和可选结果转发 |
 | `response_forwarding.py` | 推理结束后异步 POST 文本结果，失败不影响主请求 |
@@ -212,8 +231,11 @@ SBERT_MODEL_PATH = "/root/autodl-tmp/model/all-MiniLM-L6-v2/sentence-transformer
 EMBED_BATCH_SIZE = 128
 TOP_K = 5
 MAX_TOP_K = 50
+GATED_RAG = 0.0
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
+INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS = 8
+INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS = 128
 ```
 
 根据实际服务器修改模型路径。建议将训练集、测试集和模型全部放在本地磁盘，避免运行过程中依赖公网。
@@ -233,8 +255,11 @@ python -m pip install --no-index \
 ```bash
 python -m compileall \
   app.py build_index.py config.py embedding.py rag_answer.py \
-  retriever.py vlm_inference.py image_server.py \
+  retrieval_gating.py retriever.py two_stage_inference.py \
+  vlm_inference.py image_server.py \
   response_forwarding.py response_receiver.py
+
+python -m unittest test_retrieval_gating.py test_two_stage_inference.py
 
 python -c "import chromadb, torch, transformers, qwen_vl_utils; print('deps ok')"
 python -c "from embedding import encode_query; print(len(encode_query('worker wearing a helmet')))"
@@ -265,7 +290,11 @@ python build_index.py \
 ### 9.2 Python 推理
 
 ```python
-from vlm_inference import VLM_inference, VLM_inference_with_RAG
+from vlm_inference import (
+    VLM_inference,
+    VLM_inference_two_stage,
+    VLM_inference_with_RAG,
+)
 
 image = "data/inspecsafe/images/example.jpg"
 
@@ -278,14 +307,22 @@ rag = VLM_inference_with_RAG(
     "safety judgement",
     image,
     top_k=5,
+    gated_rag=0.3,
+)
+
+two_stage = VLM_inference_two_stage(
+    "safety judgement",
+    image,
 )
 
 print(baseline["output"])
 print(rag["retrieved"])
+print(rag["retrieved_count_before_gate"], rag["retrieved_count"])
 print(rag["output"])
+print(two_stage["label"], two_stage["annotation"])
 ```
 
-Baseline 返回 `task_type`、`query_image`、`query`、`prompt` 和 `output`；RAG 另外返回 `retrieved`，且 `prompt` 是包含多张图像内容块的 messages 列表。
+Baseline 返回 `task_type`、`query_image`、`query`、`prompt` 和 `output`；RAG 另外返回门控后的 `retrieved`、`gated_rag` 和过滤前后数量，且 `prompt` 是包含实际参考图像内容块的 messages 列表。两阶段接口返回最终 `label`、`annotation` 以及可调试的 `stage_one`、`stage_two` 原始结果。
 
 ### 9.3 批量 CLI
 
@@ -295,7 +332,7 @@ Baseline 返回 `task_type`、`query_image`、`query`、`prompt` 和 `output`；
 # RAG：运行前 10 条
 python vlm_inference.py \
   --dataset-csv data/inspecsafe/test.csv \
-  --top-k 5 --limit 10
+  --top-k 5 --gated_rag 0.3 --limit 10
 
 # Baseline：跳过前 20 条，再运行 10 条
 python vlm_inference.py \
@@ -320,9 +357,10 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 | POST | `/search/image` | 文本到图像检索 |
 | POST | `/search/query-image` | 查询图像到历史图像检索 |
 | POST | `/search/hybrid` | 文本驱动的 caption/image RRF 混合检索 |
-| POST | `/rag/answer` | 检索并构造文本 RAG prompt，不运行 VLM |
+| POST | `/rag/answer` | 混合检索、`gated_rag` 过滤并构造文本 RAG prompt，不运行 VLM |
 | POST | `/vlm/inference` | 单图 Baseline VLM 推理 |
 | POST | `/vlm/rag-inference` | 图像检索 + 多图 prompt + VLM 的完整流程 |
+| POST | `/vlm/two-stage-inference` | InspecSafe 两阶段确认推理，不使用检索 |
 
 检索请求示例：
 
@@ -342,11 +380,22 @@ curl -X POST http://127.0.0.1:8000/vlm/rag-inference \
     "query_image":"data/query.jpg",
     "query":"Is the following image a safe scenario?",
     "top_k":5,
+    "gated_rag":0.3,
     "max_new_tokens":1024
   }'
 ```
 
-`top_k` 的合法范围为 1–50。`query_image` 是服务器本地文件路径，而不是上传字段。
+`top_k` 的合法范围为 1–50；`gated_rag` 默认为 `0`，在 Top-k 完成后过滤低相似度案例。`query_image` 是服务器本地文件路径，而不是上传字段。
+
+InspecSafe 两阶段推理示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/vlm/two-stage-inference \
+  -H "Content-Type: application/json" \
+  -d '{"query_image":"data/query.jpg"}'
+```
+
+响应始终包含 `label`、`annotation`、`stage_one` 和 `stage_two`。第一阶段未输出 `unsafe` 时，`stage_two` 为 `null`。
 
 ## 11. 原始图像推理服务
 
@@ -363,7 +412,7 @@ RAG 模式：
 ```bash
 python image_server.py \
   --host 0.0.0.0 --port 8000 \
-  --rag --dataset inspecsafe --top-k 5
+  --rag --dataset inspecsafe --top-k 5 --gated_rag 0.3
 ```
 
 发送原始图片：
@@ -371,7 +420,7 @@ python image_server.py \
 ```bash
 curl --data-binary @query.jpg \
   -H "Content-Type: image/jpeg" \
-  "http://127.0.0.1:8000/infer?dataset=inspecsafe&top_k=5"
+  "http://127.0.0.1:8000/infer?dataset=inspecsafe&top_k=5&gated_rag=0.3"
 ```
 
 可按请求切换 `inspecsafe`、`construction_site` 或 `lab_safety_gen`。该轻量接口当前不暴露 Lab Safety 多项选择任务。返回格式为：
@@ -380,7 +429,10 @@ curl --data-binary @query.jpg \
 {
   "dataset": "inspecsafe",
   "response": "Query image observations: ...",
-  "response_time_seconds": 2.731
+  "response_time_seconds": 2.731,
+  "gated_rag": 0.3,
+  "retrieved_count_before_gate": 5,
+  "retrieved_count": 2
 }
 ```
 
@@ -407,28 +459,33 @@ python response_receiver.py \
 
 ## 12. 实验与评估
 
-所有评估脚本都支持 `baseline` 与 `rag` 两种模式，以及 `--limit`、`--offset` 和生成长度控制，便于小规模冒烟测试和分段实验。
+所有评估脚本都支持 `baseline` 与 `rag` 模式，以及 `--limit`、`--offset` 和生成长度控制；所有 RAG 模式都支持 `--gated_rag`（也可写作 `--gated-rag`，默认 `0`）。InspecSafe 另外支持 `two-stage` 模式。
 
 ```bash
 # InspecSafe
 python evaluate_inspecsafe.py \
   --dataset-csv data/inspecsafe/test.csv \
-  --mode rag --top-k 5
+  --mode rag --top-k 5 --gated_rag 0.3
+
+# InspecSafe 两阶段确认推理
+python evaluate_inspecsafe.py \
+  --dataset-csv data/inspecsafe/test.csv \
+  --mode two-stage
 
 # ConstructionSite-10K
 python evaluate_constructionsite10k.py \
   --dataset-json constructionsite_10k/test.json \
-  --mode rag --top-k 5
+  --mode rag --top-k 5 --gated_rag 0.3
 
 # Lab Safety
 python evaluate_labsafety.py \
   --dataset-json data/lab_safety/lab_test.json \
-  --mode rag --top-k 5
+  --mode rag --top-k 5 --gated_rag 0.3
 
 # LabSafety-v1 Generated
 python evaluate_labsafety_gen.py \
   --annotations-jsonl data/lab_safety_gen/annotations.jsonl \
-  --split test --mode rag --top-k 5
+  --split test --mode rag --top-k 5 --gated_rag 0.3
 ```
 
 快速验证时可追加 `--limit 10`。每次运行会将配置、逐样本输出、预测状态、错误信息和汇总指标保存到 `save/eval_results_*.json`。ConstructionSite-10K 默认使用本地 SBERT 计算 annotation 语义相似度；若只关心规则分类，可使用 `--skip-annotation-metrics`。
@@ -437,7 +494,7 @@ python evaluate_labsafety_gen.py \
 
 1. 固定数据划分、VLM、随机环境和生成参数；
 2. 分别运行 Baseline 与 RAG；
-3. 对 RAG 比较 `top_k = 1, 3, 5, 10`；
+3. 对 RAG 比较 `top_k = 1, 3, 5, 10` 以及不同 `gated_rag` 阈值；
 4. 同时报告整体指标、解析失败率和平均耗时；
 5. 检查正确变错误、错误变正确两类样本，分析检索案例的作用；
 6. 避免将测试图像加入索引，防止近重复样本造成虚高结果。
@@ -464,12 +521,16 @@ Image_RAG/
 ├── embedding.py                   # SigLIP2 编码
 ├── build_index.py                 # 多数据集索引构建
 ├── retriever.py                   # 检索与 RRF
+├── retrieval_gating.py            # Top-k 后相似度门控
 ├── rag_answer.py                  # 多任务 RAG prompt
+├── two_stage_inference.py          # InspecSafe 两阶段决策策略
 ├── vlm_inference.py               # 多后端 VLM 推理
 ├── evaluate_inspecsafe.py
 ├── evaluate_constructionsite10k.py
 ├── evaluate_labsafety.py
 ├── evaluate_labsafety_gen.py
+├── test_retrieval_gating.py       # 相似度门控及零结果回归测试
+├── test_two_stage_inference.py     # 两阶段决策模型无关测试
 ├── response_forwarding.py
 ├── response_receiver.py
 ├── preprocess/                    # 数据预处理
@@ -488,8 +549,10 @@ Image_RAG/
 2. **训练与推理解耦**：索引构建是一次性离线过程，在线服务只做查询编码、检索和生成。
 3. **数据集隔离**：每个任务使用独立 ChromaDB 目录，避免重建一个任务时覆盖另一个任务。
 4. **任务专用提示**：分类、规则 JSON、选择题和实验室危险识别分别使用不同系统提示与输出协议。
-5. **可替换模型后端**：上层接口不变，通过模型路径选择 Qwen2.5-VL、Gemma 3 或 InternVL。
-6. **可审计实验产物**：评估结果保留完整 prompt、模型原始输出和检索图片路径，可重新解析和开展误差分析。
+5. **Top-k 后质量门控**：统一使用余弦相似度阈值过滤低质量参考，并支持无参考案例退化运行。
+6. **两阶段安全确认**：InspecSafe 将简短初判和带 annotation 的复核解耦，减少单次 `unsafe` 判断直接成为最终结果的情况。
+7. **可替换模型后端**：上层接口不变，通过模型路径选择 Qwen2.5-VL、Gemma 3 或 InternVL。
+8. **可审计实验产物**：评估结果保留完整 prompt、模型原始输出、门控统计和检索图片路径，可重新解析和开展误差分析。
 
 ## 15. 当前限制与风险
 
@@ -499,7 +562,7 @@ Image_RAG/
 - Top-k 增大时，多图输入会显著增加显存、上下文长度与推理时间；
 - VLM 输出仍可能不遵守标签或 JSON 格式，因此评估代码需要解析失败统计；
 - `app.py` 接收服务器本地路径，适合受控环境；公网图片上传应使用 `image_server.py` 并额外增加鉴权；
-- 当前没有 pytest 测试套件或 CI，主要依赖静态编译检查、冒烟测试和人工实验；
+- 当前已有标准库 `unittest` 覆盖门控和两阶段决策，但仍没有完整接口测试、真实模型自动化测试或 CI；
 - 当前推理服务为单进程、单 GPU 串行执行，没有持久队列、任务取消和分布式调度；
 - 数据集类别不平衡可能使 Accuracy 高估效果，应结合 F1、混淆矩阵和逐类别结果；
 - 本系统用于研究与辅助检查，不能替代合格安全人员的现场判断和正式合规审查。

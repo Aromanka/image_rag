@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from config import (
     INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+    GATED_RAG,
     MAX_TOP_K,
     TOP_K,
     VLM_MAX_NEW_TOKENS,
@@ -37,6 +38,10 @@ class QueryRequest(BaseModel):
     top_k: int = Field(default=TOP_K, ge=1, le=MAX_TOP_K)
 
 
+class RAGQueryRequest(QueryRequest):
+    gated_rag: float = GATED_RAG
+
+
 class CaptionQueryRequest(QueryRequest):
     test_mode: bool = False
 
@@ -50,6 +55,10 @@ class VLMInferenceRequest(ImagePathRequest):
     task_type: str = "safety judgement"
     query: str | None = None
     max_new_tokens: int = Field(default=VLM_MAX_NEW_TOKENS, ge=1)
+
+
+class RAGVLMInferenceRequest(VLMInferenceRequest):
+    gated_rag: float = GATED_RAG
 
 
 class TwoStageVLMInferenceRequest(BaseModel):
@@ -108,8 +117,11 @@ def hybrid(request: QueryRequest):
 
 
 @app.post("/rag/answer")
-def rag(request: QueryRequest):
-    return execute(answer, request)
+def rag(request: RAGQueryRequest):
+    try:
+        return answer(request.query, request.top_k, request.gated_rag)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/vlm/inference")
@@ -126,13 +138,14 @@ def vlm_inference(request: VLMInferenceRequest):
 
 
 @app.post("/vlm/rag-inference")
-def vlm_rag_inference(request: VLMInferenceRequest):
+def vlm_rag_inference(request: RAGVLMInferenceRequest):
     try:
         return VLM_inference_with_RAG(
             request.task_type,
             request.query_image,
             query=request.query,
             top_k=request.top_k,
+            gated_rag=request.gated_rag,
             max_new_tokens=request.max_new_tokens,
         )
     except (ValueError, RuntimeError, OSError) as exc:

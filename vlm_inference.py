@@ -17,6 +17,7 @@ from config import (
     DEFAULT_LAB_SAFETY_QUERY,
     LAB_SAFETY_GEN_TASK,
     LAB_SAFETY_TASK,
+    GATED_RAG,
     INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     PROJECT_ROOT,
@@ -595,6 +596,7 @@ def VLM_inference_with_RAG(
     *,
     query: str | None = None,
     top_k: int = TOP_K,
+    gated_rag: float = GATED_RAG,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
     debug_mode: bool = False
 ) -> dict[str, Any]:
@@ -605,16 +607,18 @@ def VLM_inference_with_RAG(
         build_labsafety_rag_messages,
         build_rag_messages,
     )
+    from retrieval_gating import gate_retrieval_results
     from retriever import search_by_query_image
 
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
     image_path = _resolve_query_image_path(query_image)
-    retrieved = search_by_query_image(
+    top_k_retrieved = search_by_query_image(
         query_image,
         top_k=top_k,
         dataset=TASK_TO_RAG_DATASET[task_type],
     )
+    retrieved = gate_retrieval_results(top_k_retrieved, gated_rag)
     if debug_mode:
         from retriever import copy_image_to_demo, save_retrieved_images
 
@@ -634,6 +638,10 @@ def VLM_inference_with_RAG(
         "task_type": task_type,
         "query_image": str(image_path),
         "query": query,
+        "top_k": top_k,
+        "gated_rag": float(gated_rag),
+        "retrieved_count_before_gate": len(top_k_retrieved),
+        "retrieved_count": len(retrieved),
         "retrieved": retrieved,
         "prompt": messages,
         "output": output,
@@ -654,6 +662,14 @@ def parse_args() -> argparse.Namespace:
         help="Run baseline inference without RAG context.",
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--gated-rag",
+        "--gated_rag",
+        dest="gated_rag",
+        type=float,
+        default=GATED_RAG,
+        help="Keep top-k results with cosine similarity >= this threshold.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument("--limit", type=int, default=None, help="Max samples to run.")
     parser.add_argument("--offset", type=int, default=0, help="Samples to skip.")
@@ -675,7 +691,10 @@ if __name__ == "__main__":
     correct = 0
     evaluated = 0
 
-    print(f"Mode: {mode} | Samples: {total} | top_k: {args.top_k}")
+    print(
+        f"Mode: {mode} | Samples: {total} | top_k: {args.top_k} "
+        f"| gated_rag: {args.gated_rag}"
+    )
     print("-" * 60)
 
     for _, row in df.iterrows():
@@ -693,6 +712,7 @@ if __name__ == "__main__":
                 result = VLM_inference_with_RAG(
                     "safety judgement", image_path,
                     top_k=args.top_k,
+                    gated_rag=args.gated_rag,
                     max_new_tokens=args.max_new_tokens,
                     debug_mode=True
                 )

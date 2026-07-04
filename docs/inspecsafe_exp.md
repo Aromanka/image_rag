@@ -18,12 +18,17 @@ python build_index.py --dataset-csv data/inspecsafe/train.csv
 python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
 python evaluate_inspecsafe.py --mode baseline --dataset-csv data/inspecsafe/test_balanced.csv
 python evaluate_inspecsafe.py --mode two-stage --dataset-csv data/inspecsafe/test_balanced.csv
-python evaluate_inspecsafe.py --mode rag --top-k 5 --limit 1000 --dataset-csv data/inspecsafe/test.csv
+python evaluate_inspecsafe.py --mode rag --top-k 5 --gated_rag 0.3 --limit 1000 --dataset-csv data/inspecsafe/test.csv
 python utils/evaluate_rag_details.py /root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json --demo-dir demo/inspecsafe_rag_details --sample-ids 1015 175 1132 61 526 1234
 ```
 
 InspecSafe RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_rag_1781179356.json`
 constructionsite RAG: `/root/autodl-tmp/code/image_rag/save/eval_results_constructionsite10k_rag_1781160915.json`
+
+RAG modes accept `--gated_rag` (also spelled `--gated-rag`), with a default of
+`0`. Retrieval first selects `top_k`, then removes results whose cosine
+similarity (`1 - cosine distance`) is below the threshold. Zero remaining
+references is valid.
 
 ## Two-stage InspecSafe inference
 

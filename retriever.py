@@ -131,7 +131,12 @@ def _format_results(results: dict[str, Any]) -> list[SearchResult]:
 
     for item_id, distance, metadata in zip(ids, distances, metadatas):
         item = dict(metadata or {})
-        item.update({"id": item_id, "distance": float(distance)})
+        distance = float(distance)
+        item.update({
+            "id": item_id,
+            "distance": distance,
+            "similarity": 1.0 - distance,
+        })
         output.append(item)
     return output
 

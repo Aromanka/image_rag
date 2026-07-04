@@ -4,7 +4,7 @@ python build_index.py --constructionsite-json data/constructionsite/train.json
 ```
 2. evaluate
 ```bash
-python evaluate_constructionsite10k.py --dataset-json data/constructionsite/test.json --mode rag
+python evaluate_constructionsite10k.py --dataset-json data/constructionsite/test.json --mode rag --gated_rag 0.3
 python evaluate_constructionsite10k.py --dataset-json data/constructionsite/test.json --mode baseline
 ```
 3. check details

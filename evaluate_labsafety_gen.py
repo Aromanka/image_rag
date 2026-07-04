@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from config import (
     DEFAULT_LAB_SAFETY_GEN_QUERY,
+    GATED_RAG,
     LAB_SAFETY_GEN_TASK,
     PROJECT_ROOT,
     TOP_K,
@@ -94,6 +95,7 @@ def run_evaluation(
     offset: int,
     image_root: Path | None,
     query: str,
+    gated_rag: float = GATED_RAG,
 ) -> None:
     from vlm_inference import VLM_inference, VLM_inference_with_RAG
 
@@ -101,7 +103,10 @@ def run_evaluation(
     if not samples:
         sys.exit("No samples to evaluate after applying split/offset/limit.")
 
-    print(f"Evaluating {len(samples)} LabSafety-v1 samples | split={split} | mode={mode}")
+    print(
+        f"Evaluating {len(samples)} LabSafety-v1 samples | split={split} "
+        f"| mode={mode} | top_k={top_k} | gated_rag={gated_rag}"
+    )
     print("-" * 60)
 
     results: list[dict[str, Any]] = []
@@ -130,6 +135,7 @@ def run_evaluation(
                     image_path,
                     query=query,
                     top_k=top_k,
+                    gated_rag=gated_rag,
                     max_new_tokens=max_new_tokens,
                 )
 
@@ -194,6 +200,7 @@ def run_evaluation(
             "split": split,
             "mode": mode,
             "top_k": top_k,
+            "gated_rag": gated_rag,
             "max_new_tokens": max_new_tokens,
             "limit": limit,
             "offset": offset,
@@ -264,6 +271,14 @@ def parse_args() -> argparse.Namespace:
         help="Inference mode.",
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--gated-rag",
+        "--gated_rag",
+        dest="gated_rag",
+        type=float,
+        default=GATED_RAG,
+        help="Keep top-k RAG results with cosine similarity >= this threshold.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--offset", type=int, default=0)
@@ -278,6 +293,7 @@ if __name__ == "__main__":
         split=args.split,
         mode=args.mode,
         top_k=args.top_k,
+        gated_rag=args.gated_rag,
         max_new_tokens=args.max_new_tokens,
         limit=args.limit,
         offset=args.offset,

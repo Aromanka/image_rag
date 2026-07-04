@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from config import (
     CONSTRUCTIONSITE10K_TASK,
+    GATED_RAG,
     LAB_SAFETY_GEN_TASK,
     MAX_TOP_K,
     RESPONSE_FORWARD_TIMEOUT_SECONDS,
@@ -27,6 +28,7 @@ from config import (
     VLM_MAX_NEW_TOKENS,
 )
 from response_forwarding import forward_text_response
+from retrieval_gating import validate_gated_rag
 from vlm_inference import (
     VLM_inference,
     VLM_inference_with_RAG,
@@ -77,12 +79,14 @@ def create_app(
     *,
     default_dataset: str = "inspecsafe",
     default_top_k: int = TOP_K,
+    default_gated_rag: float = GATED_RAG,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
     max_upload_mb: int = 20,
     preload: bool = True,
     use_rag: bool = False,
 ) -> FastAPI:
     canonical_default, _ = _resolve_dataset(default_dataset)
+    default_gated_rag = validate_gated_rag(default_gated_rag)
     max_upload_bytes = max_upload_mb * 1024 * 1024
     inference_lock = asyncio.Lock()
 
@@ -129,6 +133,7 @@ def create_app(
         background_tasks: BackgroundTasks,
         dataset: str | None = Query(default=None),
         top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
+        gated_rag: float | None = Query(default=None),
     ) -> JSONResponse:
         request_started = time.perf_counter()
         selected = dataset or canonical_default
@@ -163,10 +168,23 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
         effective_top_k = top_k or default_top_k
+        try:
+            effective_gated_rag = validate_gated_rag(
+                gated_rag if gated_rag is not None else default_gated_rag
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
         print(
             f"Inference started: mode={'rag' if use_rag else 'vlm'} "
             f"dataset={canonical_dataset} bytes={len(payload)}"
-            + (f" top_k={effective_top_k}" if use_rag else ""),
+            + (
+                f" top_k={effective_top_k} gated_rag={effective_gated_rag}"
+                if use_rag
+                else ""
+            ),
             flush=True,
         )
 
@@ -181,6 +199,7 @@ def create_app(
                             task_type,
                             image_path,
                             top_k=effective_top_k,
+                            gated_rag=effective_gated_rag,
                             max_new_tokens=max_new_tokens,
                         )
                     else:
@@ -212,12 +231,22 @@ def create_app(
                 inference_seconds=elapsed,
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
+        response_payload = {
+            "dataset": canonical_dataset,
+            "response": output,
+            "response_time_seconds": round(elapsed, 3),
+        }
+        if use_rag:
+            response_payload.update({
+                "gated_rag": effective_gated_rag,
+                "retrieved_count": result.get("retrieved_count", 0),
+                "retrieved_count_before_gate": result.get(
+                    "retrieved_count_before_gate",
+                    0,
+                ),
+            })
         return JSONResponse(
-            {
-                "dataset": canonical_dataset,
-                "response": output,
-                "response_time_seconds": round(elapsed, 3),
-            },
+            response_payload,
             headers={
                 "X-Dataset": canonical_dataset,
                 "X-Inference-Seconds": f"{elapsed:.3f}",
@@ -246,6 +275,14 @@ def parse_args() -> argparse.Namespace:
         help="Default dataset: inspecsafe, construction_site, or lab_safety_gen.",
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--gated-rag",
+        "--gated_rag",
+        dest="gated_rag",
+        type=float,
+        default=GATED_RAG,
+        help="Keep top-k RAG results with cosine similarity >= this threshold.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument("--max-upload-mb", type=int, default=20)
     parser.add_argument(
@@ -280,6 +317,7 @@ if __name__ == "__main__":
         create_app(
             default_dataset=args.dataset,
             default_top_k=args.top_k,
+            default_gated_rag=args.gated_rag,
             max_new_tokens=args.max_new_tokens,
             max_upload_mb=args.max_upload_mb,
             preload=not args.no_preload,

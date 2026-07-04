@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from config import PROJECT_ROOT, TOP_K
+from config import GATED_RAG, PROJECT_ROOT, TOP_K
 
 
 LAB_SAFETY_SYSTEM_PROMPT = """You are a laboratory safety expert reviewing images from a lab safety training dataset.
@@ -332,12 +332,22 @@ def build_labsafety_gen_rag_messages(
     ]
 
 
-def answer(query: str, top_k: int = TOP_K) -> dict[str, Any]:
+def answer(
+    query: str,
+    top_k: int = TOP_K,
+    gated_rag: float = GATED_RAG,
+) -> dict[str, Any]:
+    from retrieval_gating import gate_retrieval_results
     from retriever import hybrid_search
 
-    retrieved = hybrid_search(query, top_k)
+    top_k_retrieved = hybrid_search(query, top_k)
+    retrieved = gate_retrieval_results(top_k_retrieved, gated_rag)
     return {
         "query": query,
+        "top_k": top_k,
+        "gated_rag": float(gated_rag),
+        "retrieved_count_before_gate": len(top_k_retrieved),
+        "retrieved_count": len(retrieved),
         "retrieved": retrieved,
         "prompt": build_prompt(query, retrieved),
     }
