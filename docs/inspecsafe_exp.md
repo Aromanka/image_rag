@@ -11,8 +11,19 @@ python preprocess/InspecSafe_1.py \
 ```
 2. build rag database from train
 ```bash
+# Legacy CSV input
 python build_index.py --dataset-csv data/inspecsafe/train.csv
+
+# Safety-level pipeline JSON input
+python build_index.py \
+  --dataset-input data/inspecsafe_pipeline/pipeline_train.json \
+  --input-format inspecsafe_pipeline \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH
 ```
+
+The pipeline loader preserves `scene_description`, `hazards`,
+`safety_level`, and `overall_safety_level` in Chroma metadata. It also derives
+the legacy `safe_label`: Level IV is `safe`, while Levels I-III are `unsafe`.
 3. evaluate
 ```bash
 python evaluate_inspecsafe.py --dataset-csv data/inspecsafe/test.csv
@@ -33,17 +44,17 @@ an assistant message whose content is a JSON string with
 # Baseline (query image only)
 python evaluate_inspecsafe_safety_level.py \
   --mode baseline \
-  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --dataset-json data/inspecsafe_pipeline/pipeline_test.json \
   --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
   --limit 10
 
 # Image RAG
 python evaluate_inspecsafe_safety_level.py \
   --mode rag \
-  --dataset-json /root/autodl-tmp/pipeline_test.json \
+  --dataset-json data/inspecsafe_pipeline/pipeline_test.json \
   --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
   --top-k 5 \
-  --gated_rag 0.3
+  --gated_rag 0.5
 ```
 
 The result JSON reports the same metric set as the reference evaluator:

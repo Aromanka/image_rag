@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +24,7 @@ from utils.evaluate_utils import (
     extract_inspecsafe_safety_level_json,
     normalize_inspecsafe_safety_level,
 )
+from utils.inspecsafe_paths import pipeline_image_to_dataset_path
 
 
 def load_inspecsafe_safety_level_data(dataset_json: Path) -> list[dict[str, Any]]:
@@ -70,45 +70,6 @@ def user_query(sample: dict[str, Any]) -> str | None:
                     if text:
                         return text
     return None
-
-
-def pipeline_image_to_dataset_path(
-    pipeline_image: str,
-    data_root: str | Path = INSPECSAFE_DATA_ROOT,
-) -> Path:
-    """Convert a flattened pipeline image path to the original dataset path.
-
-    Pipeline paths have the form
-    ``images/{split}__{instance}__{filename}``. In the original InspecSafe
-    tree, Level04 samples are normal and Levels 01-03 are anomalous.
-    """
-    normalized = str(pipeline_image).strip().replace("\\", "/")
-    filename_with_context = normalized.rsplit("/", maxsplit=1)[-1]
-    parts = filename_with_context.split("__", maxsplit=2)
-    if len(parts) != 3 or not all(parts):
-        raise ValueError(
-            "Invalid pipeline image path. Expected "
-            "'images/{split}__{instance}__{filename}', got: "
-            f"{pipeline_image!r}"
-        )
-
-    split, instance, filename = parts
-    if split not in {"train", "test"}:
-        raise ValueError(f"Unsupported InspecSafe split in image path: {split!r}")
-
-    level_match = re.search(r"Level0?([1-4])(?:-|$)", instance, re.IGNORECASE)
-    if level_match is None:
-        raise ValueError(f"Cannot determine safety level from instance: {instance!r}")
-
-    data_type = "Normal_data" if level_match.group(1) == "4" else "Anomaly_data"
-    return (
-        Path(data_root)
-        / split
-        / "Annotations"
-        / data_type
-        / instance
-        / filename
-    )
 
 
 def resolve_sample_image(

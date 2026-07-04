@@ -168,7 +168,7 @@ id,image_path,caption,safe_label
 |---|---|
 | `config.py` | 模型路径、索引目录、集合名称、任务映射、Top-k、生成参数和转发配置 |
 | `embedding.py` | 本地 SigLIP2 加载；文本/图像批量编码；特征 L2 归一化；离线模式控制 |
-| `build_index.py` | 解析四种数据格式，批量生成向量并建立 ChromaDB 索引 |
+| `build_index.py` | 解析 CSV、InspecSafe pipeline JSON 等五种数据格式，批量生成向量并建立 ChromaDB 索引 |
 | `retriever.py` | 四类检索、Top-k 校验、数据集索引选择、结果格式化与调试图片复制 |
 | `retrieval_gating.py` | Top-k 后余弦相似度门控、阈值校验与过滤结果标准化 |
 | `rag_answer.py` | 通用和任务专用多图 RAG messages/prompt 构造 |
@@ -275,6 +275,12 @@ python -c "from embedding import encode_query; print(len(encode_query('worker we
 ```bash
 # InspecSafe
 python build_index.py --dataset-csv data/inspecsafe/train.csv
+
+# InspecSafe pipeline safety-level JSON
+python build_index.py \
+  --dataset-input data/inspecsafe_pipeline/pipeline_train.json \
+  --input-format inspecsafe_pipeline \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH
 
 # ConstructionSite-10K
 python build_index.py --constructionsite-json constructionsite_10k/train.json

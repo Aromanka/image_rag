@@ -10,7 +10,7 @@ from utils.evaluate_utils import (
 )
 from rag_answer import build_inspecsafe_safety_level_rag_messages
 from vlm_inference import build_baseline_prompt
-from evaluate_inspecsafe_safety_level import pipeline_image_to_dataset_path
+from utils.inspecsafe_paths import pipeline_image_to_dataset_path
 
 
 class SafetyLevelParsingTests(unittest.TestCase):

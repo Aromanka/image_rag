@@ -19,6 +19,7 @@ from config import (
     EMBED_BATCH_SIZE,
     EMBED_MODEL_PATH,
     IMAGE_COLLECTION,
+    INSPECSAFE_DATA_ROOT,
     INSPECSAFE_DATASET,
     LAB_SAFETY_DATASET,
     LAB_SAFETY_GEN_DATASET,
@@ -26,9 +27,12 @@ from config import (
     RESET_COLLECTIONS_ON_BUILD,
 )
 from embedding import encode_documents, encode_images
+from utils.inspecsafe_paths import pipeline_image_to_dataset_path
 
 
 REQUIRED_COLUMNS = {"id", "image_path", "caption", "safe_label"}
+INSPECSAFE_INPUT_FORMAT_CSV = "csv"
+INSPECSAFE_INPUT_FORMAT_PIPELINE = "inspecsafe_pipeline"
 
 
 def resolve_image_path(image_path: str) -> Path:
@@ -84,6 +88,127 @@ def _message_content(sample: dict[str, Any], role: str) -> str:
                     and str(item.get("text", "")).strip()
                 )
     return ""
+
+
+def load_inspecsafe_pipeline_dataset(
+    dataset_json: Path,
+    data_root: str | Path = INSPECSAFE_DATA_ROOT,
+) -> pd.DataFrame:
+    """Load pipeline_train.json into the common InspecSafe index schema."""
+    if not dataset_json.is_file():
+        raise FileNotFoundError(f"Dataset not found: {dataset_json}")
+
+    with dataset_json.open("r", encoding="utf-8") as file:
+        samples = json.load(file)
+    if not isinstance(samples, list) or not samples:
+        raise ValueError("InspecSafe pipeline JSON must contain a non-empty list.")
+
+    rows: list[dict[str, str]] = []
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            raise ValueError(f"Pipeline sample {index} must be a JSON object.")
+
+        raw_image = str(sample.get("image", "")).strip().replace("\\", "/")
+        image_path = pipeline_image_to_dataset_path(raw_image, data_root)
+        assistant_content = _message_content(sample, "assistant")
+        ground_truth = _parse_json_object(assistant_content)
+        metadata = sample.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        scene_description = str(
+            ground_truth.get("scene_description")
+            or metadata.get("scene_description")
+            or ""
+        ).strip()
+        hazards = ground_truth.get("hazards", metadata.get("hazards", []))
+        if not isinstance(hazards, list):
+            hazards = [str(hazards)] if str(hazards).strip() else []
+        hazards = [str(hazard).strip() for hazard in hazards if str(hazard).strip()]
+
+        safety_level = str(metadata.get("safety_level", "")).strip()
+        overall_safety_level = str(
+            ground_truth.get("overall_safety_level")
+            or metadata.get("overall_safety_level")
+            or ""
+        ).strip()
+        level_aliases = {
+            "level i": "Level I",
+            "level 1": "Level I",
+            "level one": "Level I",
+            "level ii": "Level II",
+            "level 2": "Level II",
+            "level two": "Level II",
+            "level iii": "Level III",
+            "level 3": "Level III",
+            "level three": "Level III",
+            "level iv": "Level IV",
+            "level 4": "Level IV",
+            "level four": "Level IV",
+        }
+        normalized_level = level_aliases.get(overall_safety_level.lower())
+        if normalized_level is None:
+            safety_level_match = re.fullmatch(
+                r"level0?([1-4])",
+                safety_level,
+                re.IGNORECASE,
+            )
+            if safety_level_match:
+                normalized_level = {
+                    "1": "Level I",
+                    "2": "Level II",
+                    "3": "Level III",
+                    "4": "Level IV",
+                }[safety_level_match.group(1)]
+        if normalized_level is None:
+            raise ValueError(
+                f"Pipeline sample {index} has no valid overall safety level."
+            )
+        overall_safety_level = normalized_level
+        is_normal = overall_safety_level == "Level IV"
+        split = str(metadata.get("split", "")).strip()
+        if not split:
+            split = raw_image.rsplit("/", maxsplit=1)[-1].split("__", maxsplit=1)[0]
+
+        caption = scene_description or assistant_content
+        if not caption:
+            caption = f"InspecSafe scene classified as {overall_safety_level}."
+
+        rows.append(
+            {
+                "id": Path(raw_image.rsplit("/", maxsplit=1)[-1]).stem,
+                "image_path": str(image_path),
+                "caption": caption,
+                "safe_label": "safe" if is_normal else "unsafe",
+                "safety_level": safety_level,
+                "overall_safety_level": overall_safety_level,
+                "scene_description": scene_description,
+                "hazards": json.dumps(hazards, ensure_ascii=False),
+                "split": split,
+            }
+        )
+
+    dataframe = pd.DataFrame(rows)
+    if dataframe["id"].duplicated().any():
+        raise ValueError("InspecSafe pipeline image IDs must be unique.")
+    return dataframe
+
+
+def load_inspecsafe_dataset(
+    dataset_path: Path,
+    input_format: str = INSPECSAFE_INPUT_FORMAT_CSV,
+    data_root: str | Path = INSPECSAFE_DATA_ROOT,
+) -> pd.DataFrame:
+    """Load either legacy CSV or pipeline JSON InspecSafe input."""
+    normalized_format = input_format.strip().lower().replace("-", "_")
+    if normalized_format == INSPECSAFE_INPUT_FORMAT_CSV:
+        return load_dataset(dataset_path)
+    if normalized_format == INSPECSAFE_INPUT_FORMAT_PIPELINE:
+        return load_inspecsafe_pipeline_dataset(dataset_path, data_root)
+    raise ValueError(
+        "Unsupported InspecSafe input format. Expected one of: "
+        f"{INSPECSAFE_INPUT_FORMAT_CSV}, {INSPECSAFE_INPUT_FORMAT_PIPELINE}."
+    )
 
 
 def load_constructionsite10k_dataset(dataset_json: Path) -> pd.DataFrame:
@@ -375,9 +500,13 @@ def build_indexes_from_dataframe(
     print(f"Built both indexes with {len(dataframe)} items in {index_dir}.")
 
 
-def build_indexes(dataset_csv: Path) -> None:
+def build_indexes(
+    dataset_path: Path,
+    input_format: str = INSPECSAFE_INPUT_FORMAT_CSV,
+    data_root: str | Path = INSPECSAFE_DATA_ROOT,
+) -> None:
     build_indexes_from_dataframe(
-        load_dataset(dataset_csv),
+        load_inspecsafe_dataset(dataset_path, input_format, data_root),
         dataset=INSPECSAFE_DATASET,
     )
 
@@ -409,10 +538,12 @@ def parse_args() -> argparse.Namespace:
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
+        "--dataset-input",
         "--dataset-csv",
         "--dataset_csv",
+        dest="dataset_input",
         type=Path,
-        help="Path to the dataset CSV file.",
+        help="Path to an InspecSafe CSV or pipeline JSON input file.",
     )
     source.add_argument(
         "--constructionsite-json",
@@ -428,6 +559,20 @@ def parse_args() -> argparse.Namespace:
         "--lab-safety-gen-jsonl",
         type=Path,
         help="Path to LabSafety-v1 annotations.jsonl.",
+    )
+    parser.add_argument(
+        "--input-format",
+        "--input-data-format",
+        "--input_data_format",
+        choices=[INSPECSAFE_INPUT_FORMAT_CSV, INSPECSAFE_INPUT_FORMAT_PIPELINE],
+        default=INSPECSAFE_INPUT_FORMAT_CSV,
+        help="Format used by --dataset-input (default: csv).",
+    )
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path(INSPECSAFE_DATA_ROOT),
+        help="Original InspecSafe DATA_PATH root used for pipeline JSON images.",
     )
     parser.add_argument(
         "--split",
@@ -447,4 +592,4 @@ if __name__ == "__main__":
     elif args.lab_safety_gen_jsonl:
         build_labsafety_gen_indexes(args.lab_safety_gen_jsonl, args.split)
     else:
-        build_indexes(args.dataset_csv)
+        build_indexes(args.dataset_input, args.input_format, args.data_root)

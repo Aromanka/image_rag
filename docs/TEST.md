@@ -60,6 +60,12 @@ python -c "from embedding import encode_query; print(len(encode_query('worker we
 
 ```bash
 python build_index.py --dataset-csv data/InspecSafe/dataset.csv
+
+# Or build the InspecSafe safety-level index from pipeline JSON
+python build_index.py \
+  --dataset-input data/inspecsafe_pipeline/pipeline_train.json \
+  --input-format inspecsafe_pipeline \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH
 ```
 
 This creates both Chroma collections under `chroma_db/`. Rebuild the indexes
