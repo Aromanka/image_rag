@@ -182,7 +182,7 @@ python evaluate_inspecsafe.py --mode two-stage --dataset-csv data/inspecsafe/tes
 python evaluate_inspecsafe_safety_level.py \
   --mode rag \
   --dataset-json /root/autodl-tmp/pipeline_test.json \
-  --image-root /root/autodl-tmp/pipeline_images \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
   --top-k 5 \
   --limit 50
 ```

@@ -7,6 +7,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 CHROMA_DIR = PROJECT_ROOT / "chroma_db"
 DEMO_DIR = PROJECT_ROOT / "demo"
 
+# Server-side root of the original InspecSafe-V1 directory tree.
+INSPECSAFE_DATA_ROOT = "/root/autodl-tmp/data/inspecsafe/DATA_PATH"
+
 CAPTION_COLLECTION = "siglip2_caption_rag"
 IMAGE_COLLECTION = "siglip2_image_rag"
 

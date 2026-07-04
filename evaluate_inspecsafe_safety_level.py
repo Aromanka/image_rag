@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from tqdm import tqdm
-
 from config import (
     GATED_RAG,
+    INSPECSAFE_DATA_ROOT,
     INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS,
     PROJECT_ROOT,
     SAFETY_LEVEL_TASK,
@@ -72,16 +72,61 @@ def user_query(sample: dict[str, Any]) -> str | None:
     return None
 
 
+def pipeline_image_to_dataset_path(
+    pipeline_image: str,
+    data_root: str | Path = INSPECSAFE_DATA_ROOT,
+) -> Path:
+    """Convert a flattened pipeline image path to the original dataset path.
+
+    Pipeline paths have the form
+    ``images/{split}__{instance}__{filename}``. In the original InspecSafe
+    tree, Level04 samples are normal and Levels 01-03 are anomalous.
+    """
+    normalized = str(pipeline_image).strip().replace("\\", "/")
+    filename_with_context = normalized.rsplit("/", maxsplit=1)[-1]
+    parts = filename_with_context.split("__", maxsplit=2)
+    if len(parts) != 3 or not all(parts):
+        raise ValueError(
+            "Invalid pipeline image path. Expected "
+            "'images/{split}__{instance}__{filename}', got: "
+            f"{pipeline_image!r}"
+        )
+
+    split, instance, filename = parts
+    if split not in {"train", "test"}:
+        raise ValueError(f"Unsupported InspecSafe split in image path: {split!r}")
+
+    level_match = re.search(r"Level0?([1-4])(?:-|$)", instance, re.IGNORECASE)
+    if level_match is None:
+        raise ValueError(f"Cannot determine safety level from instance: {instance!r}")
+
+    data_type = "Normal_data" if level_match.group(1) == "4" else "Anomaly_data"
+    return (
+        Path(data_root)
+        / split
+        / "Annotations"
+        / data_type
+        / instance
+        / filename
+    )
+
+
 def resolve_sample_image(
     sample: dict[str, Any],
     dataset_json: Path,
     image_root: Path | None,
+    data_root: Path | None = None,
 ) -> Path:
-    """Resolve images like the reference evaluator (image root + basename)."""
+    """Resolve a sample against the real dataset or a legacy flat image root."""
     stored_image = str(sample.get("image", "")).strip()
     if not stored_image:
         raise ValueError("Sample is missing the 'image' field.")
 
+    if data_root is not None and image_root is None:
+        return pipeline_image_to_dataset_path(stored_image, data_root)
+
+    # Retain compatibility with the reference evaluator's flat pipeline_images
+    # directory when --image-root is explicitly provided.
     if image_root is not None:
         return image_root / Path(stored_image).name
 
@@ -153,8 +198,10 @@ def run_evaluation(
     output_json: Path | None,
     compute_scene_metrics: bool,
     sbert_path: Path | None,
+    data_root: Path | None = None,
 ) -> Path:
     from vlm_inference import VLM_inference, VLM_inference_with_RAG
+    from tqdm import tqdm
 
     samples = load_inspecsafe_safety_level_data(dataset_json)
     samples = samples[offset:]
@@ -196,7 +243,12 @@ def run_evaluation(
             progress.set_description(f"[{sample_id}] SKIP - invalid level")
             continue
 
-        image_path = resolve_sample_image(sample, dataset_json, image_root)
+        image_path = resolve_sample_image(
+            sample,
+            dataset_json,
+            image_root,
+            data_root,
+        )
         try:
             if mode == "baseline":
                 result = VLM_inference(
@@ -268,6 +320,7 @@ def run_evaluation(
         "metadata": {
             "dataset_json": str(dataset_json),
             "image_root": str(image_root) if image_root else None,
+            "data_root": str(data_root) if data_root else None,
             "task_type": SAFETY_LEVEL_TASK,
             "mode": mode,
             "top_k": top_k,
@@ -298,14 +351,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-json",
         type=Path,
-        default=PROJECT_ROOT / "data" / "inspecsafe" / "pipeline_test.json",
+        default=PROJECT_ROOT / "data" / "inspecsafe_pipeline" / "pipeline_test.json",
         help="Pipeline-format JSON containing image and assistant label messages.",
+    )
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path(INSPECSAFE_DATA_ROOT),
+        help=(
+            "Original InspecSafe DATA_PATH root. Pipeline image paths are "
+            "converted into its split/Annotations hierarchy."
+        ),
     )
     parser.add_argument(
         "--image-root",
         type=Path,
         default=None,
-        help="Image directory. Images are resolved by basename, matching the reference.",
+        help=(
+            "Legacy flat pipeline_images directory. When provided, it takes "
+            "precedence over --data-root and images are resolved by basename."
+        ),
     )
     parser.add_argument("--mode", choices=["baseline", "rag"], default="rag")
     parser.add_argument("--top-k", type=int, default=TOP_K)
@@ -347,4 +412,5 @@ if __name__ == "__main__":
         output_json=args.output_json,
         compute_scene_metrics=not args.skip_scene_metrics,
         sbert_path=args.sbert_path,
+        data_root=args.data_root,
     )

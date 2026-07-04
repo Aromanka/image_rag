@@ -34,13 +34,14 @@ an assistant message whose content is a JSON string with
 python evaluate_inspecsafe_safety_level.py \
   --mode baseline \
   --dataset-json /root/autodl-tmp/pipeline_test.json \
-  --image-root /root/autodl-tmp/pipeline_images
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
+  --limit 10
 
 # Image RAG
 python evaluate_inspecsafe_safety_level.py \
   --mode rag \
   --dataset-json /root/autodl-tmp/pipeline_test.json \
-  --image-root /root/autodl-tmp/pipeline_images \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
   --top-k 5 \
   --gated_rag 0.3
 ```
@@ -50,6 +51,13 @@ JSON parse rate; safety-level accuracy; per-level and macro/micro precision,
 recall, and F1; hazard micro precision/recall/F1; and scene-description SBERT
 similarity. The default SBERT path is `SBERT_MODEL_PATH` from `config.py`.
 Pass `--skip-scene-metrics` when the local SBERT snapshot is unavailable.
+
+Pipeline paths such as
+`images/test__oil_chemical-Level01-Wheeled-002319__oil_chemical-Level01-Wheeled-002319-001.jpg`
+are converted to the original server tree automatically. Level04 is resolved
+under `Normal_data`; Levels 01-03 are resolved under `Anomaly_data`. Use the
+legacy `--image-root /root/autodl-tmp/pipeline_images` option only when the
+flattened image directory is available instead.
 
 Saved outputs can be rescored without rerunning the VLM:
 

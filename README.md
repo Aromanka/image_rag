@@ -476,7 +476,7 @@ python evaluate_inspecsafe.py \
 # InspecSafe Safety Level（参考 pipeline JSON 格式）
 python evaluate_inspecsafe_safety_level.py \
   --dataset-json /root/autodl-tmp/pipeline_test.json \
-  --image-root /root/autodl-tmp/pipeline_images \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
   --mode rag --top-k 5 --gated_rag 0.3
 
 # ConstructionSite-10K

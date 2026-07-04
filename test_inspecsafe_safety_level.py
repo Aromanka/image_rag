@@ -1,6 +1,7 @@
 """CPU-only tests for InspecSafe safety-level parsing and metrics."""
 
 import unittest
+from pathlib import Path
 
 from utils.evaluate_utils import (
     evaluate_inspecsafe_safety_level_results_json,
@@ -9,9 +10,43 @@ from utils.evaluate_utils import (
 )
 from rag_answer import build_inspecsafe_safety_level_rag_messages
 from vlm_inference import build_baseline_prompt
+from evaluate_inspecsafe_safety_level import pipeline_image_to_dataset_path
 
 
 class SafetyLevelParsingTests(unittest.TestCase):
+    def test_converts_pipeline_anomaly_path_to_original_dataset(self):
+        converted = pipeline_image_to_dataset_path(
+            "images/test__oil_chemical-Level01-Wheeled-002319__"
+            "oil_chemical-Level01-Wheeled-002319-001.jpg",
+            "/root/autodl-tmp/data/inspecsafe/DATA_PATH",
+        )
+        self.assertEqual(
+            converted,
+            Path("/root/autodl-tmp/data/inspecsafe/DATA_PATH")
+            / "test"
+            / "Annotations"
+            / "Anomaly_data"
+            / "oil_chemical-Level01-Wheeled-002319"
+            / "oil_chemical-Level01-Wheeled-002319-001.jpg",
+        )
+
+    def test_converts_level04_to_normal_data(self):
+        converted = pipeline_image_to_dataset_path(
+            "images/train__coal_conveyor-Level04-SuspendedRail-000001__"
+            "coal_conveyor-Level04-SuspendedRail-000001-001.jpg",
+            "/dataset",
+        )
+        self.assertEqual(
+            converted,
+            Path("/dataset/train/Annotations/Normal_data/")
+            / "coal_conveyor-Level04-SuspendedRail-000001"
+            / "coal_conveyor-Level04-SuspendedRail-000001-001.jpg",
+        )
+
+    def test_rejects_unrecognized_pipeline_path(self):
+        with self.assertRaises(ValueError):
+            pipeline_image_to_dataset_path("images/not-a-pipeline-name.jpg", "/dataset")
+
     def test_extracts_and_repairs_first_json_object(self):
         parsed = extract_inspecsafe_safety_level_json(
             "prefix {'hazards': ['smoke',], "
