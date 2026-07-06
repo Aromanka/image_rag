@@ -84,6 +84,7 @@ The response body contains the model output and the complete request latency:
 
 ```json
 {
+  "status": "success",
   "dataset": "inspecsafe",
   "response": "Query image observations: ...",
   "response_time_seconds": 2.731,
@@ -93,14 +94,30 @@ The response body contains the model output and the complete request latency:
 }
 ```
 
-`response_time_seconds` measures from the moment `/infer` starts receiving the
-request—including reading and validating the image, waiting for the inference
-lock, retrieval, and VLM generation—until the response is created. Response
-forwarding runs afterward and is not included in this value.
+The server accepts only one inference request at a time. It does not queue
+additional images while the VLM is working. A request received while the VLM
+lock is closed returns immediately with HTTP 200 and empty result fields:
 
-Only one GPU inference runs at a time. Extra requests wait in memory, which
-avoids concurrent requests exhausting VRAM. If the port should not be public,
-bind to `127.0.0.1` and use an SSH tunnel instead.
+```json
+{
+  "status": "BUSY",
+  "dataset": "",
+  "response": "",
+  "response_time_seconds": ""
+}
+```
+
+Clients should retry a `BUSY` request after a delay. The busy response is not
+forwarded to `RESPONSE_FORWARD_URL`.
+
+`response_time_seconds` measures from the moment an accepted `/infer` request
+starts—including reading and validating the image, retrieval, and VLM
+generation—until the response is created. Response forwarding runs afterward
+and is not included in this value.
+
+Only one GPU inference runs at a time. Extra requests receive `BUSY` instead of
+waiting in memory. If the port should not be public, bind to `127.0.0.1` and use
+an SSH tunnel instead.
 
 ## 4. Forward each model response to another server
 
@@ -231,6 +248,7 @@ Its JSON response body should include:
 
 ```json
 {
+  "status": "success",
   "dataset": "inspecsafe",
   "response": "<model output>",
   "response_time_seconds": 2.731

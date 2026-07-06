@@ -4,7 +4,6 @@ Send the image bytes directly in the POST body. No multipart form is required.
 """
 
 import argparse
-import asyncio
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
@@ -55,6 +54,11 @@ IMAGE_SUFFIXES = {
     "TIFF": ".tiff",
 }
 
+# This process serves one VLM request at a time. The flag is deliberately
+# global so every /infer route instance in this worker observes the same state.
+# True means available; False means an inference request currently owns it.
+VLM_LOCK_OPEN = True
+
 
 def _resolve_dataset(value: str) -> tuple[str, str]:
     normalized = value.strip().lower().replace("-", "_")
@@ -88,7 +92,6 @@ def create_app(
     canonical_default, _ = _resolve_dataset(default_dataset)
     default_gated_rag = validate_gated_rag(default_gated_rag)
     max_upload_bytes = max_upload_mb * 1024 * 1024
-    inference_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -127,13 +130,12 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok", "default_dataset": canonical_default}
 
-    @app.post("/infer", response_class=JSONResponse)
-    async def infer(
+    async def _infer_unlocked(
         request: Request,
         background_tasks: BackgroundTasks,
-        dataset: str | None = Query(default=None),
-        top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
-        gated_rag: float | None = Query(default=None),
+        dataset: str | None,
+        top_k: int | None,
+        gated_rag: float | None,
     ) -> JSONResponse:
         request_started = time.perf_counter()
         selected = dataset or canonical_default
@@ -192,23 +194,22 @@ def create_app(
             with tempfile.TemporaryDirectory(prefix="image-rag-") as temp_dir:
                 image_path = Path(temp_dir) / f"query{suffix}"
                 image_path.write_bytes(payload)
-                async with inference_lock:
-                    if use_rag:
-                        result = await run_in_threadpool(
-                            VLM_inference_with_RAG,
-                            task_type,
-                            image_path,
-                            top_k=effective_top_k,
-                            gated_rag=effective_gated_rag,
-                            max_new_tokens=max_new_tokens,
-                        )
-                    else:
-                        result = await run_in_threadpool(
-                            VLM_inference,
-                            task_type,
-                            image_path,
-                            max_new_tokens=max_new_tokens,
-                        )
+                if use_rag:
+                    result = await run_in_threadpool(
+                        VLM_inference_with_RAG,
+                        task_type,
+                        image_path,
+                        top_k=effective_top_k,
+                        gated_rag=effective_gated_rag,
+                        max_new_tokens=max_new_tokens,
+                    )
+                else:
+                    result = await run_in_threadpool(
+                        VLM_inference,
+                        task_type,
+                        image_path,
+                        max_new_tokens=max_new_tokens,
+                    )
         except (FileNotFoundError, ValueError) as exc:
             print(f"Inference rejected: {exc}", flush=True)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -232,6 +233,7 @@ def create_app(
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
         response_payload = {
+            "status": "success",
             "dataset": canonical_dataset,
             "response": output,
             "response_time_seconds": round(elapsed, 3),
@@ -256,6 +258,46 @@ def create_app(
             },
             background=background_tasks,
         )
+
+    @app.post("/infer", response_class=JSONResponse)
+    async def infer(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        dataset: str | None = Query(default=None),
+        top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
+        gated_rag: float | None = Query(default=None),
+    ) -> JSONResponse:
+        global VLM_LOCK_OPEN
+
+        # There is no await between checking and closing the flag, so this is
+        # atomic with respect to other requests on this worker's event loop.
+        if not VLM_LOCK_OPEN:
+            return JSONResponse(
+                {
+                    "status": "BUSY",
+                    "dataset": "",
+                    "response": "",
+                    "response_time_seconds": "",
+                },
+                headers={
+                    "X-Dataset": "",
+                    "X-Inference-Seconds": "",
+                    "X-Response-Forwarding": "disabled",
+                    "X-VLM-Status": "BUSY",
+                },
+            )
+
+        VLM_LOCK_OPEN = False
+        try:
+            return await _infer_unlocked(
+                request,
+                background_tasks,
+                dataset,
+                top_k,
+                gated_rag,
+            )
+        finally:
+            VLM_LOCK_OPEN = True
 
     return app
 
