@@ -109,6 +109,7 @@ def _processor_path_for_lora() -> str | Path:
 
 def _apply_lora_weights(model: Any) -> Any:
     if _ACTIVE_LORA_WEIGHTS is None:
+        print(f'Not using LORA!')
         return model
 
     try:

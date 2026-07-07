@@ -23,7 +23,7 @@ python build_index.py --lab-safety-gen-jsonl data/lab_safety_gen/annotations.jso
 
 2. Evaluate
 ```bash
-python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode rag --gated_rag 0.3
+python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode rag --gated_rag 0.5
 python evaluate_labsafety_gen.py --annotations-jsonl data/lab_safety_gen/annotations.jsonl --split test --mode baseline
 ```
 
