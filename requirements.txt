@@ -3,6 +3,7 @@ accelerate
 fastapi
 numpy
 pandas
+peft
 pillow
 qwen-vl-utils
 rouge-score

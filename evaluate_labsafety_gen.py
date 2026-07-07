@@ -96,8 +96,17 @@ def run_evaluation(
     image_root: Path | None,
     query: str,
     gated_rag: float = GATED_RAG,
+    lora_weights: str | Path | None = None,
 ) -> None:
-    from vlm_inference import VLM_inference, VLM_inference_with_RAG
+    from vlm_inference import (
+        VLM_inference,
+        VLM_inference_with_RAG,
+        active_lora_weights,
+        configure_lora_weights,
+    )
+
+    if lora_weights is not None:
+        configure_lora_weights(lora_weights)
 
     samples = load_labsafety_gen_samples(annotations_jsonl, split, limit, offset)
     if not samples:
@@ -206,6 +215,7 @@ def run_evaluation(
             "offset": offset,
             "image_root": str(image_root) if image_root else None,
             "query": query,
+            "lora_weights": active_lora_weights(),
             "elapsed_seconds": elapsed,
             "inference_errors": errors,
         },
@@ -283,6 +293,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--query", type=str, default=DEFAULT_LAB_SAFETY_GEN_QUERY)
+    from vlm_inference import add_lora_cli_arg
+
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -299,4 +312,5 @@ if __name__ == "__main__":
         offset=args.offset,
         image_root=args.image_root,
         query=args.query,
+        lora_weights=args.lora_weights,
     )

@@ -160,9 +160,18 @@ def run_evaluation(
     compute_scene_metrics: bool,
     sbert_path: Path | None,
     data_root: Path | None = None,
+    lora_weights: str | Path | None = None,
 ) -> Path:
-    from vlm_inference import VLM_inference, VLM_inference_with_RAG
+    from vlm_inference import (
+        VLM_inference,
+        VLM_inference_with_RAG,
+        active_lora_weights,
+        configure_lora_weights,
+    )
     from tqdm import tqdm
+
+    if lora_weights is not None:
+        configure_lora_weights(lora_weights)
 
     samples = load_inspecsafe_safety_level_data(dataset_json)
     samples = samples[offset:]
@@ -287,6 +296,7 @@ def run_evaluation(
             "top_k": top_k,
             "gated_rag": gated_rag,
             "max_new_tokens": max_new_tokens,
+            "lora_weights": active_lora_weights(),
             "limit": limit,
             "offset": offset,
             "elapsed_seconds": elapsed,
@@ -356,6 +366,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip scene-description SBERT similarity.",
     )
+    from vlm_inference import add_lora_cli_arg
+
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -374,4 +387,5 @@ if __name__ == "__main__":
         compute_scene_metrics=not args.skip_scene_metrics,
         sbert_path=args.sbert_path,
         data_root=args.data_root,
+        lora_weights=args.lora_weights,
     )

@@ -31,6 +31,9 @@ from retrieval_gating import validate_gated_rag
 from vlm_inference import (
     VLM_inference,
     VLM_inference_with_RAG,
+    active_lora_weights,
+    configure_lora_weights,
+    add_lora_cli_arg,
     preload_models,
     preload_vlm_model,
 )
@@ -88,7 +91,11 @@ def create_app(
     max_upload_mb: int = 20,
     preload: bool = True,
     use_rag: bool = False,
+    lora_weights: str | Path | None = None,
 ) -> FastAPI:
+    if lora_weights is not None:
+        configure_lora_weights(lora_weights)
+
     canonical_default, _ = _resolve_dataset(default_dataset)
     default_gated_rag = validate_gated_rag(default_gated_rag)
     max_upload_bytes = max_upload_mb * 1024 * 1024
@@ -118,6 +125,10 @@ def create_app(
             print(f"Response forwarding enabled: {RESPONSE_FORWARD_URL}", flush=True)
         else:
             print("Response forwarding disabled (RESPONSE_FORWARD_URL is empty).", flush=True)
+        if active_lora_weights():
+            print(f"LoRA weights enabled: {active_lora_weights()}", flush=True)
+        else:
+            print("LoRA weights disabled.", flush=True)
         yield
 
     app = FastAPI(
@@ -127,8 +138,12 @@ def create_app(
     )
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "default_dataset": canonical_default}
+    def health() -> dict[str, str | None]:
+        return {
+            "status": "ok",
+            "default_dataset": canonical_default,
+            "lora_weights": active_lora_weights(),
+        }
 
     async def _infer_unlocked(
         request: Request,
@@ -337,6 +352,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Load models on the first request instead of at startup.",
     )
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -364,6 +380,7 @@ if __name__ == "__main__":
             max_upload_mb=args.max_upload_mb,
             preload=not args.no_preload,
             use_rag=args.rag,
+            lora_weights=args.lora_weights,
         ),
         host=args.host,
         port=args.port,

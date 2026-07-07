@@ -67,6 +67,7 @@ VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 # VLM_MODEL_PATH = "/root/autodl-tmp/model/internvl2_4b"
 
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
+VLM_LORA_WEIGHTS = ""
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
 

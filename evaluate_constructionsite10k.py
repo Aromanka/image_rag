@@ -105,8 +105,17 @@ def run_evaluation(
     sbert_path: str | Path | None,
     skip_annotation_metrics: bool,
     gated_rag: float = GATED_RAG,
+    lora_weights: str | Path | None = None,
 ) -> None:
-    from vlm_inference import VLM_inference, VLM_inference_with_RAG
+    from vlm_inference import (
+        VLM_inference,
+        VLM_inference_with_RAG,
+        active_lora_weights,
+        configure_lora_weights,
+    )
+
+    if lora_weights is not None:
+        configure_lora_weights(lora_weights)
 
     samples = load_constructionsite10k_samples(dataset_json, limit, offset)
     if not samples:
@@ -189,6 +198,7 @@ def run_evaluation(
             "limit": limit,
             "offset": offset,
             "image_root": str(image_root) if image_root else None,
+            "lora_weights": active_lora_weights(),
             "elapsed_seconds": elapsed,
             "inference_errors": errors,
         },
@@ -284,6 +294,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip ROUGE-L and SBERT annotation similarity metrics.",
     )
+    from vlm_inference import add_lora_cli_arg
+
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -300,4 +313,5 @@ if __name__ == "__main__":
         image_root=args.image_root,
         sbert_path=args.sbert_path,
         skip_annotation_metrics=args.skip_annotation_metrics,
+        lora_weights=args.lora_weights,
     )

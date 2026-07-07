@@ -38,12 +38,18 @@ def run_evaluation(
     limit: int | None,
     offset: int,
     gated_rag: float = GATED_RAG,
+    lora_weights: str | Path | None = None,
 ) -> None:
     from vlm_inference import (
         VLM_inference,
         VLM_inference_two_stage,
         VLM_inference_with_RAG,
+        active_lora_weights,
+        configure_lora_weights,
     )
+
+    if lora_weights is not None:
+        configure_lora_weights(lora_weights)
 
     df = pd.read_csv(dataset_csv)
     required_cols = {"id", "image_path", "safe_label"}
@@ -172,6 +178,7 @@ def run_evaluation(
             "max_new_tokens": max_new_tokens,
             "stage_one_max_new_tokens": stage_one_max_new_tokens,
             "stage_two_max_new_tokens": stage_two_max_new_tokens,
+            "lora_weights": active_lora_weights(),
             "limit": limit,
             "offset": offset,
             "elapsed_seconds": elapsed,
@@ -260,6 +267,9 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Number of samples to skip from the start.",
     )
+    from vlm_inference import add_lora_cli_arg
+
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -275,5 +285,6 @@ if __name__ == "__main__":
         stage_two_max_new_tokens=args.stage_two_max_new_tokens,
         limit=args.limit,
         offset=args.offset,
+        lora_weights=args.lora_weights,
     )
 

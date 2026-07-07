@@ -28,6 +28,7 @@ from config import (
     TASK_TO_RAG_DATASET,
     TOP_K,
     VLM_MAX_NEW_TOKENS,
+    VLM_LORA_WEIGHTS,
     VLM_MODEL_PATH,
     VLM_PROCESSOR_PATH,
     VLM_USE_FLASH_ATTENTION,
@@ -41,6 +42,90 @@ INTERNVL_IMG_SIZE = 448
 INTERNVL_IMAGENET_MEAN = (0.485, 0.456, 0.406)
 INTERNVL_IMAGENET_STD = (0.229, 0.224, 0.225)
 INTERNVL_IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+_ACTIVE_LORA_WEIGHTS: Path | None = None
+
+
+def _normalize_optional_path(path: str | Path | None) -> Path | None:
+    if path is None:
+        return None
+    if isinstance(path, str) and not path.strip():
+        return None
+    raw_path = Path(path).expanduser()
+    if not raw_path.is_absolute():
+        raw_path = PROJECT_ROOT / raw_path
+    return raw_path
+
+
+def configure_lora_weights(lora_weights: str | Path | None) -> None:
+    """Configure optional PEFT LoRA weights before the VLM is first loaded."""
+    global _ACTIVE_LORA_WEIGHTS
+
+    normalized = _normalize_optional_path(lora_weights)
+    if normalized is not None and not normalized.exists():
+        raise FileNotFoundError(f"LoRA weights path not found: {normalized}")
+
+    if normalized == _ACTIVE_LORA_WEIGHTS:
+        return
+
+    if _vlm_components.cache_info().currsize:
+        raise RuntimeError(
+            "Cannot change LoRA weights after the VLM has been loaded in this "
+            "process. Configure --lora-weights before preloading or inference."
+        )
+    _ACTIVE_LORA_WEIGHTS = normalized
+
+
+def active_lora_weights() -> str | None:
+    return str(_ACTIVE_LORA_WEIGHTS) if _ACTIVE_LORA_WEIGHTS is not None else None
+
+
+def add_lora_cli_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--lora-weights",
+        "--lora_weights",
+        dest="lora_weights",
+        type=Path,
+        default=None,
+        help=(
+            "Optional PEFT LoRA adapter directory or file. Relative paths are "
+            "resolved from the project root."
+        ),
+    )
+
+
+def _processor_path_for_lora() -> str | Path:
+    if _ACTIVE_LORA_WEIGHTS is None or not _ACTIVE_LORA_WEIGHTS.is_dir():
+        return VLM_PROCESSOR_PATH
+    processor_markers = (
+        "preprocessor_config.json",
+        "processor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+    )
+    if any((_ACTIVE_LORA_WEIGHTS / marker).exists() for marker in processor_markers):
+        return _ACTIVE_LORA_WEIGHTS
+    return VLM_PROCESSOR_PATH
+
+
+def _apply_lora_weights(model: Any) -> Any:
+    if _ACTIVE_LORA_WEIGHTS is None:
+        return model
+
+    try:
+        from peft import PeftModel
+    except ImportError as exc:
+        raise RuntimeError(
+            "LoRA weights require the 'peft' package. Install project "
+            "dependencies after updating requirements.txt."
+        ) from exc
+
+    model = PeftModel.from_pretrained(
+        model,
+        str(_ACTIVE_LORA_WEIGHTS),
+        is_trainable=False,
+    )
+    print(f"Loaded LoRA weights: {_ACTIVE_LORA_WEIGHTS}", flush=True)
+    return model
 
 
 def _validate_task_type(task_type: str) -> str:
@@ -150,8 +235,9 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
             VLM_MODEL_PATH,
             **model_kwargs,
         )
+        model = _apply_lora_weights(model)
         processor = AutoProcessor.from_pretrained(
-            VLM_PROCESSOR_PATH,
+            str(_processor_path_for_lora()),
             trust_remote_code=True,
         )
         model.eval()
@@ -171,7 +257,7 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
             model_kwargs["attn_implementation"] = "flash_attention_2"
 
         tokenizer = AutoTokenizer.from_pretrained(
-            VLM_PROCESSOR_PATH,
+            str(_processor_path_for_lora()),
             trust_remote_code=True,
             use_fast=False,
         )
@@ -179,6 +265,7 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
             VLM_MODEL_PATH,
             **model_kwargs,
         )
+        model = _apply_lora_weights(model)
         img_context_token_id = tokenizer.convert_tokens_to_ids(
             INTERNVL_IMG_CONTEXT_TOKEN
         )
@@ -202,9 +289,13 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
         VLM_MODEL_PATH,
         **model_kwargs,
     )
-    processor = AutoProcessor.from_pretrained(VLM_PROCESSOR_PATH)
+    model = _apply_lora_weights(model)
+    processor = AutoProcessor.from_pretrained(str(_processor_path_for_lora()))
     model.eval()
     return model, processor, backend, process_vision_info, torch
+
+
+configure_lora_weights(os.environ.get("VLM_LORA_WEIGHTS") or VLM_LORA_WEIGHTS)
 
 
 def _model_input_device(model: Any, torch: Any) -> Any:
@@ -692,6 +783,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
     parser.add_argument("--limit", type=int, default=None, help="Max samples to run.")
     parser.add_argument("--offset", type=int, default=0, help="Samples to skip.")
+    add_lora_cli_arg(parser)
     return parser.parse_args()
 
 
@@ -700,6 +792,8 @@ if __name__ == "__main__":
     from evaluate_inspecsafe import extract_label
 
     args = parse_args()
+    if args.lora_weights is not None:
+        configure_lora_weights(args.lora_weights)
     df = pd.read_csv(args.dataset_csv)
     df = df.iloc[args.offset:]
     if args.limit is not None:

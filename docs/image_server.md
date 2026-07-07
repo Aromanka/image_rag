@@ -34,7 +34,7 @@ longer overwrite each other.
 
 ```bash
 python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset inspecsafe --top-k 5 --gated_rag 0.3
-python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset constructionsite10k --top-k 3 --gated_rag 0.3
+python image_server.py --host 0.0.0.0 --port 8000 --rag --dataset constructionsite10k --top-k 3 --gated_rag 0.8
 ```
 
 Model loading happens during startup. Wait for `Model loading complete. Server is ready.`
