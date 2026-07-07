@@ -62,12 +62,12 @@ DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 DEFAULT_LAB_SAFETY_QUERY = "Answer the lab safety multiple-choice question."
 DEFAULT_LAB_SAFETY_GEN_QUERY = "Classify this laboratory scene as hazardous or non-hazardous."
 
-VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
-# VLM_MODEL_PATH = "/root/autodl-tmp/model/gemma3_4b"
+# VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
+VLM_MODEL_PATH = "/root/autodl-tmp/model/gemma3_4b"
 # VLM_MODEL_PATH = "/root/autodl-tmp/model/internvl2_4b"
 
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
-VLM_LORA_WEIGHTS = ""
+VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_inspecsafe/"
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
 
