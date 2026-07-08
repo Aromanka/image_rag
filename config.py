@@ -57,6 +57,25 @@ SUPPORTED_TASK_TYPES = {
     LAB_SAFETY_GEN_TASK,
 }
 DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
+DEFAULT_SAFETY_QUERY_2 = """
+You are evaluating the overall safety condition of a construction site.
+
+Judge the overall scenario based only on what is clearly visible.
+
+Label the image as:
+
+safe:
+- No obvious unsafe acts or hazardous conditions are visible.
+- Workers appear to follow normal safety practices.
+- Any hazards seem appropriately managed.
+
+unsafe:
+- There is clear evidence of serious safety violations or imminent danger.
+
+If the image does not provide enough evidence of unsafe conditions, prefer SAFE rather than assuming hidden hazards.
+
+Do not speculate about risks outside the image.
+"""
 DEFAULT_SAFETY_LEVEL_QUERY = "Assess the safety level of this inspection image."
 DEFAULT_CONSTRUCTIONSITE10K_QUERY = "Inspect this construction site image."
 DEFAULT_LAB_SAFETY_QUERY = "Answer the lab safety multiple-choice question."
