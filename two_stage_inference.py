@@ -23,26 +23,19 @@ SafetyGenerator = Callable[[Union[str, Path], str, int], str]
 
 def build_stage_one_prompt(query: str) -> str:
     """Build the short classification-only InspecSafe prompt."""
-    return f"""You are a construction site safety visual inspection assistant.
-
-{query}
-
-Use only the query image as evidence.
+    return f"""{query}
 
 Classify the query image as safe or unsafe.
 Respond with exactly one word: safe or unsafe.
-Do not output observations, reasoning, punctuation, or any other text.
 """
 
 
 def build_stage_two_prompt(query: str) -> str:
     """Build the verification prompt used after an unsafe first pass."""
-    return f"""You are a construction safety visual inspection assistant.
-
+    return f"""
 {query}
 
-Use only the query image as evidence. Independently re-check whether the query
-image is unsafe. Give one short annotation describing the visible safety issue.
+Give one short annotation describing the image. And than give a conclusion of safe or unsafe.
 
 Return your answer in exactly this format:
 Annotation: <one short sentence>

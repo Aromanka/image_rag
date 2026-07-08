@@ -56,13 +56,12 @@ SUPPORTED_TASK_TYPES = {
     LAB_SAFETY_TASK,
     LAB_SAFETY_GEN_TASK,
 }
-DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
-DEFAULT_SAFETY_QUERY_2 = """
+DEFAULT_SAFETY_QUERY = """
 You are evaluating the overall safety condition of a construction site based on clearly visible evidence.
 
-A scene is UNSAFE only when the image **clearly** and **definitely** shows unsafe actions, missing required protective equipment, or uncontrolled hazardous conditions.
+A scene is UNSAFE only when the image **clearly** and **definitely** shows unsafe actions, missing required protective equipment(Helmet), or expected hazards.
 
-Otherwise, if there is no strong evidence, it is safe!
+Otherwise, in most occasions, it is safe!
 
 Do not infer hidden risks.
 Do not assume missing information.
