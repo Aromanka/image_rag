@@ -58,21 +58,15 @@ SUPPORTED_TASK_TYPES = {
 }
 DEFAULT_SAFETY_QUERY = "Is the following image a safe scenario?"
 DEFAULT_SAFETY_QUERY_2 = """
-You are evaluating the overall safety condition of a construction site.
+You are evaluating the overall safety condition of a construction site based on clearly visible evidence.
 
-Judge the overall scenario based only on what is clearly visible.
+A scene is UNSAFE only when the image **clearly** and **definitely** shows unsafe actions, missing required protective equipment, or uncontrolled hazardous conditions.
 
-Label the image as:
+Otherwise, if there is no strong evidence, it is safe!
 
-safe:
-- No obvious unsafe acts or hazardous conditions are visible.
-- Workers appear to follow normal safety practices.
-- Any hazards seem appropriately managed.
-
-unsafe:
-- There is clear evidence of serious safety violations or imminent danger.
-
-If the image does not provide enough evidence of unsafe conditions, prefer SAFE rather than assuming hidden hazards.
+Do not infer hidden risks.
+Do not assume missing information.
+Construction activity alone does not imply an unsafe scene.
 
 Do not speculate about risks outside the image.
 """
