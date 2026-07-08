@@ -11,6 +11,7 @@ Start the server with no mode flag:
 
 ```bash
 python image_server.py --host 0.0.0.0 --port 8000
+python image_server_latency_first.py --host 0.0.0.0 --port 8000
 ```
 
 The request and response interfaces are the same as in RAG mode. `dataset`
