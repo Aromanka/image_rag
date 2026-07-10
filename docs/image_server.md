@@ -19,6 +19,24 @@ still selects the task-specific prompt, but no image retrieval or ChromaDB index
 is used. The `top_k` parameter is accepted for interface compatibility and is
 ignored in this mode.
 
+## Offline folder test with latency-first two-stage inference
+
+To test a local folder without starting any HTTP service, run
+`image_server_latency_first.py` with `--test-folder`. The script preloads the
+same VLM backend used by `/infer`, validates each image, writes it to the same
+temporary-query path shape, runs two-stage inference, prints each LLM response
+to the terminal, and saves one JSON object per image to a JSONL file.
+
+```bash
+python image_server_latency_first.py \
+  --test-folder /path/to/images \
+  --test-output save/latency_first_folder_results.jsonl
+```
+
+Use `--test-recursive` to include subdirectories. If `--test-output` is omitted,
+the script writes to `save/image_server_latency_first_<timestamp>.jsonl`.
+Response forwarding is not used in this offline mode.
+
 ## 1. Build one independent index for each dataset
 
 ```bash
