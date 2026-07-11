@@ -1,7 +1,10 @@
-"""Minimal raw-image HTTP server for low-latency VLM or RAG inference.
+"""Raw-image HTTP server with request-selected accuracy and latency modes.
 
-Send the image bytes directly in the POST body. No multipart form is required.
+Send image bytes directly in the POST body and select the backend with the
+required ``mode`` query parameter. No multipart form is required.
 """
+
+from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
@@ -16,37 +19,43 @@ from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 from config import (
-    CONSTRUCTIONSITE10K_TASK,
-    GATED_RAG,
-    LAB_SAFETY_GEN_TASK,
+    INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     MAX_TOP_K,
     RESPONSE_FORWARD_TIMEOUT_SECONDS,
     RESPONSE_FORWARD_URL,
     SAFETY_JUDGEMENT_TASK,
     TOP_K,
+    UNIFIED_SAFETY_DATASET,
     VLM_MAX_NEW_TOKENS,
 )
 from response_forwarding import forward_text_response
-from retrieval_gating import validate_gated_rag
 from vlm_inference import (
-    VLM_inference,
+    VLM_inference_two_stage,
     VLM_inference_with_RAG,
     active_lora_weights,
-    configure_lora_weights,
     add_lora_cli_arg,
+    configure_lora_weights,
     preload_models,
-    preload_vlm_model,
 )
 
 
-DATASET_ALIASES = {
-    "inspecsafe": ("inspecsafe", SAFETY_JUDGEMENT_TASK),
-    "construction_site": ("constructionsite10k", CONSTRUCTIONSITE10K_TASK),
-    "constructionsite": ("constructionsite10k", CONSTRUCTIONSITE10K_TASK),
-    "constructionsite10k": ("constructionsite10k", CONSTRUCTIONSITE10K_TASK),
-    "lab_safety_gen": ("lab_safety_gen", LAB_SAFETY_GEN_TASK),
-    "labsafety_gen": ("lab_safety_gen", LAB_SAFETY_GEN_TASK),
-}
+ACCURACY_MODE = "accuracy"
+LATENCY_MODE = "latency"
+SUPPORTED_MODES = {ACCURACY_MODE, LATENCY_MODE}
+ACCURACY_GATE = 0.7
+
+# Both inference modes receive this exact task prompt. Keeping it here makes
+# the HTTP service independent of the task prompts in config.py.
+SAFETY_PROMPT = """You are evaluating the overall safety condition shown in the image.
+
+Classify the image as UNSAFE only when clearly visible evidence shows an unsafe
+action, missing required personal protective equipment, or a definite workplace
+hazard. Otherwise classify it as SAFE.
+
+Use only visible evidence from the query image. Do not infer hidden risks, assume
+missing information, or treat ordinary construction or laboratory activity as
+unsafe by itself."""
 
 IMAGE_SUFFIXES = {
     "JPEG": ".jpg",
@@ -57,19 +66,17 @@ IMAGE_SUFFIXES = {
     "TIFF": ".tiff",
 }
 
-# This process serves one VLM request at a time. The flag is deliberately
-# global so every /infer route instance in this worker observes the same state.
-# True means available; False means an inference request currently owns it.
+# One worker owns one model. Requests received while inference is active return
+# BUSY immediately instead of accumulating in GPU memory.
 VLM_LOCK_OPEN = True
 
 
-def _resolve_dataset(value: str) -> tuple[str, str]:
-    normalized = value.strip().lower().replace("-", "_")
-    resolved = DATASET_ALIASES.get(normalized)
-    if resolved is None:
-        choices = "inspecsafe, construction_site, lab_safety_gen"
-        raise ValueError(f"Unsupported dataset '{value}'. Choose one of: {choices}.")
-    return resolved
+def _normalize_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized not in SUPPORTED_MODES:
+        choices = ", ".join(sorted(SUPPORTED_MODES))
+        raise ValueError(f"Unsupported mode '{mode}'. Choose one of: {choices}.")
+    return normalized
 
 
 def _image_suffix(payload: bytes) -> str:
@@ -82,44 +89,76 @@ def _image_suffix(payload: bytes) -> str:
     return IMAGE_SUFFIXES.get(image_format.upper(), ".img")
 
 
+def _format_latency_response(result: dict) -> str:
+    if str(result.get("label", "")).strip().lower() != "unsafe":
+        return "safe"
+    annotation = str(result.get("annotation", "")).strip()
+    return f"unsafe {annotation}" if annotation else "unsafe"
+
+
+def _run_inference(
+    *,
+    image_path: Path,
+    mode: str,
+    top_k: int,
+    max_new_tokens: int,
+    stage_one_max_new_tokens: int,
+    stage_two_max_new_tokens: int,
+) -> tuple[str, dict]:
+    if mode == ACCURACY_MODE:
+        result = VLM_inference_with_RAG(
+            SAFETY_JUDGEMENT_TASK,
+            image_path,
+            query=SAFETY_PROMPT,
+            top_k=top_k,
+            gated_rag=ACCURACY_GATE,
+            rag_dataset=UNIFIED_SAFETY_DATASET,
+            max_new_tokens=max_new_tokens,
+        )
+        return str(result["output"]), result
+
+    result = VLM_inference_two_stage(
+        SAFETY_JUDGEMENT_TASK,
+        image_path,
+        query=SAFETY_PROMPT,
+        stage_one_max_new_tokens=stage_one_max_new_tokens,
+        stage_two_max_new_tokens=stage_two_max_new_tokens,
+    )
+    return _format_latency_response(result), result
+
+
 def create_app(
     *,
-    default_dataset: str = "inspecsafe",
     default_top_k: int = TOP_K,
-    default_gated_rag: float = GATED_RAG,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+    stage_one_max_new_tokens: int = INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    stage_two_max_new_tokens: int = INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     max_upload_mb: int = 20,
     preload: bool = True,
-    use_rag: bool = False,
     lora_weights: str | Path | None = None,
 ) -> FastAPI:
     if lora_weights is not None:
         configure_lora_weights(lora_weights)
 
-    canonical_default, _ = _resolve_dataset(default_dataset)
-    default_gated_rag = validate_gated_rag(default_gated_rag)
     max_upload_bytes = max_upload_mb * 1024 * 1024
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if use_rag:
-            from retriever import index_item_count
+        from retriever import index_item_count
 
-            datasets = ("inspecsafe", "constructionsite10k", "lab_safety_gen")
-            for dataset in datasets:
-                try:
-                    count = index_item_count(dataset)
-                    print(f"RAG index ready: {dataset} ({count} images)", flush=True)
-                except RuntimeError as exc:
-                    print(f"RAG index unavailable: {dataset} ({exc})", flush=True)
+        try:
+            count = index_item_count(UNIFIED_SAFETY_DATASET)
+            print(
+                f"Unified RAG index ready: {UNIFIED_SAFETY_DATASET} "
+                f"({count} images)",
+                flush=True,
+            )
+        except RuntimeError as exc:
+            print(f"Unified RAG index unavailable: {exc}", flush=True)
 
         if preload:
-            if use_rag:
-                print("Loading SigLIP2 and VLM models...", flush=True)
-                await run_in_threadpool(preload_models)
-            else:
-                print("Loading VLM model...", flush=True)
-                await run_in_threadpool(preload_vlm_model)
+            print("Loading SigLIP2 and VLM models...", flush=True)
+            await run_in_threadpool(preload_models)
             print("Model loading complete. Server is ready.", flush=True)
         if RESPONSE_FORWARD_URL:
             print(f"Response forwarding enabled: {RESPONSE_FORWARD_URL}", flush=True)
@@ -132,32 +171,35 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="Image RAG inference" if use_rag else "Image VLM inference",
-        version="1.0.0",
+        title="Image safety inference",
+        version="2.0.0",
         lifespan=lifespan,
     )
 
     @app.get("/health")
-    def health() -> dict[str, str | None]:
+    def health() -> dict[str, object]:
         return {
             "status": "ok",
-            "default_dataset": canonical_default,
+            "modes": sorted(SUPPORTED_MODES),
+            "accuracy_rag_dataset": UNIFIED_SAFETY_DATASET,
+            "accuracy_gate": ACCURACY_GATE,
             "lora_weights": active_lora_weights(),
         }
 
     async def _infer_unlocked(
         request: Request,
         background_tasks: BackgroundTasks,
-        dataset: str | None,
+        mode: str,
         top_k: int | None,
-        gated_rag: float | None,
     ) -> JSONResponse:
         request_started = time.perf_counter()
-        selected = dataset or canonical_default
         try:
-            canonical_dataset, task_type = _resolve_dataset(selected)
+            selected_mode = _normalize_mode(mode)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdigit():
@@ -181,91 +223,76 @@ def create_app(
 
         try:
             suffix = _image_suffix(payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-
-        effective_top_k = top_k or default_top_k
-        try:
-            effective_gated_rag = validate_gated_rag(
-                gated_rag if gated_rag is not None else default_gated_rag
+            effective_top_k = top_k or default_top_k
+            print(
+                f"Inference started: mode={selected_mode} bytes={len(payload)}"
+                + (
+                    f" rag_dataset={UNIFIED_SAFETY_DATASET} "
+                    f"top_k={effective_top_k} gate={ACCURACY_GATE}"
+                    if selected_mode == ACCURACY_MODE
+                    else ""
+                ),
+                flush=True,
             )
-        except ValueError as exc:
+            with tempfile.TemporaryDirectory(prefix="image-rag-") as temp_dir:
+                image_path = Path(temp_dir) / f"query{suffix}"
+                image_path.write_bytes(payload)
+                output, result = await run_in_threadpool(
+                    _run_inference,
+                    image_path=image_path,
+                    mode=selected_mode,
+                    top_k=effective_top_k,
+                    max_new_tokens=max_new_tokens,
+                    stage_one_max_new_tokens=stage_one_max_new_tokens,
+                    stage_two_max_new_tokens=stage_two_max_new_tokens,
+                )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Inference rejected: {exc}", flush=True)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
-        print(
-            f"Inference started: mode={'rag' if use_rag else 'vlm'} "
-            f"dataset={canonical_dataset} bytes={len(payload)}"
-            + (
-                f" top_k={effective_top_k} gated_rag={effective_gated_rag}"
-                if use_rag
-                else ""
-            ),
-            flush=True,
-        )
-
-        try:
-            with tempfile.TemporaryDirectory(prefix="image-rag-") as temp_dir:
-                image_path = Path(temp_dir) / f"query{suffix}"
-                image_path.write_bytes(payload)
-                if use_rag:
-                    result = await run_in_threadpool(
-                        VLM_inference_with_RAG,
-                        task_type,
-                        image_path,
-                        top_k=effective_top_k,
-                        gated_rag=effective_gated_rag,
-                        max_new_tokens=max_new_tokens,
-                    )
-                else:
-                    result = await run_in_threadpool(
-                        VLM_inference,
-                        task_type,
-                        image_path,
-                        max_new_tokens=max_new_tokens,
-                    )
-        except (FileNotFoundError, ValueError) as exc:
-            print(f"Inference rejected: {exc}", flush=True)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         except RuntimeError as exc:
             print(f"Inference failed: {exc}", flush=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
-            )
+            ) from exc
 
         elapsed = time.perf_counter() - request_started
-        output = str(result["output"])
         print(f"Inference result ({elapsed:.3f}s):\n{output}\n", flush=True)
         if RESPONSE_FORWARD_URL:
             background_tasks.add_task(
                 forward_text_response,
                 RESPONSE_FORWARD_URL,
                 output,
-                dataset=canonical_dataset,
+                dataset=UNIFIED_SAFETY_DATASET,
                 inference_seconds=elapsed,
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
-        response_payload = {
+
+        response_payload: dict[str, object] = {
             "status": "success",
-            "dataset": canonical_dataset,
+            "mode": selected_mode,
             "response": output,
             "response_time_seconds": round(elapsed, 3),
         }
-        if use_rag:
-            response_payload.update({
-                "gated_rag": effective_gated_rag,
-                "retrieved_count": result.get("retrieved_count", 0),
-                "retrieved_count_before_gate": result.get(
-                    "retrieved_count_before_gate",
-                    0,
-                ),
-            })
+        if selected_mode == ACCURACY_MODE:
+            response_payload.update(
+                {
+                    "rag_dataset": UNIFIED_SAFETY_DATASET,
+                    "gated_rag": ACCURACY_GATE,
+                    "retrieved_count_before_gate": result.get(
+                        "retrieved_count_before_gate", 0
+                    ),
+                    "retrieved_count": result.get("retrieved_count", 0),
+                }
+            )
+
         return JSONResponse(
             response_payload,
             headers={
-                "X-Dataset": canonical_dataset,
+                "X-Inference-Mode": selected_mode,
                 "X-Inference-Seconds": f"{elapsed:.3f}",
                 "X-Response-Forwarding": (
                     "scheduled" if RESPONSE_FORWARD_URL else "disabled"
@@ -278,24 +305,21 @@ def create_app(
     async def infer(
         request: Request,
         background_tasks: BackgroundTasks,
-        dataset: str | None = Query(default=None),
+        mode: str = Query(..., description="Inference mode: accuracy or latency."),
         top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
-        gated_rag: float | None = Query(default=None),
     ) -> JSONResponse:
         global VLM_LOCK_OPEN
 
-        # There is no await between checking and closing the flag, so this is
-        # atomic with respect to other requests on this worker's event loop.
         if not VLM_LOCK_OPEN:
             return JSONResponse(
                 {
                     "status": "BUSY",
-                    "dataset": "",
+                    "mode": mode,
                     "response": "",
                     "response_time_seconds": "",
                 },
                 headers={
-                    "X-Dataset": "",
+                    "X-Inference-Mode": mode,
                     "X-Inference-Seconds": "",
                     "X-Response-Forwarding": "disabled",
                     "X-VLM-Status": "BUSY",
@@ -304,13 +328,7 @@ def create_app(
 
         VLM_LOCK_OPEN = False
         try:
-            return await _infer_unlocked(
-                request,
-                background_tasks,
-                dataset,
-                top_k,
-                gated_rag,
-            )
+            return await _infer_unlocked(request, background_tasks, mode, top_k)
         finally:
             VLM_LOCK_OPEN = True
 
@@ -322,31 +340,23 @@ app = create_app()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Serve VLM inference from raw image POST requests."
+        description="Serve request-selected accuracy or latency image inference."
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument(
-        "--dataset",
-        default="inspecsafe",
-        help="Default dataset: inspecsafe, construction_site, or lab_safety_gen.",
-    )
     parser.add_argument("--top-k", type=int, default=TOP_K)
-    parser.add_argument(
-        "--gated-rag",
-        "--gated_rag",
-        dest="gated_rag",
-        type=float,
-        default=GATED_RAG,
-        help="Keep top-k RAG results with cosine similarity >= this threshold.",
-    )
     parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
-    parser.add_argument("--max-upload-mb", type=int, default=20)
     parser.add_argument(
-        "--rag",
-        action="store_true",
-        help="Enable retrieval-augmented inference (default: pure VLM inference).",
+        "--stage-one-max-new-tokens",
+        type=int,
+        default=INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     )
+    parser.add_argument(
+        "--stage-two-max-new-tokens",
+        type=int,
+        default=INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+    )
+    parser.add_argument("--max-upload-mb", type=int, default=20)
     parser.add_argument(
         "--no-preload",
         action="store_true",
@@ -364,22 +374,21 @@ if __name__ == "__main__":
         raise SystemExit(f"--top-k must be between 1 and {MAX_TOP_K}.")
     if args.max_new_tokens < 1:
         raise SystemExit("--max-new-tokens must be at least 1.")
+    if args.stage_one_max_new_tokens < 1:
+        raise SystemExit("--stage-one-max-new-tokens must be at least 1.")
+    if args.stage_two_max_new_tokens < 1:
+        raise SystemExit("--stage-two-max-new-tokens must be at least 1.")
     if args.max_upload_mb < 1:
         raise SystemExit("--max-upload-mb must be at least 1.")
-    try:
-        _resolve_dataset(args.dataset)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
 
     uvicorn.run(
         create_app(
-            default_dataset=args.dataset,
             default_top_k=args.top_k,
-            default_gated_rag=args.gated_rag,
             max_new_tokens=args.max_new_tokens,
+            stage_one_max_new_tokens=args.stage_one_max_new_tokens,
+            stage_two_max_new_tokens=args.stage_two_max_new_tokens,
             max_upload_mb=args.max_upload_mb,
             preload=not args.no_preload,
-            use_rag=args.rag,
             lora_weights=args.lora_weights,
         ),
         host=args.host,

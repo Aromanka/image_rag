@@ -1,5 +1,7 @@
 """VLM inference entry points with optional image RAG context."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -703,6 +705,7 @@ def VLM_inference_with_RAG(
     query: str | None = None,
     top_k: int = TOP_K,
     gated_rag: float = GATED_RAG,
+    rag_dataset: str | None = None,
     max_new_tokens: int = VLM_MAX_NEW_TOKENS,
     debug_mode: bool = False
 ) -> dict[str, Any]:
@@ -720,10 +723,11 @@ def VLM_inference_with_RAG(
     task_type = _validate_task_type(task_type)
     query = query or _default_query_for_task(task_type)
     image_path = _resolve_query_image_path(query_image)
+    retrieval_dataset = rag_dataset or TASK_TO_RAG_DATASET[task_type]
     top_k_retrieved = search_by_query_image(
         query_image,
         top_k=top_k,
-        dataset=TASK_TO_RAG_DATASET[task_type],
+        dataset=retrieval_dataset,
     )
     retrieved = gate_retrieval_results(top_k_retrieved, gated_rag)
     if debug_mode:
@@ -751,6 +755,7 @@ def VLM_inference_with_RAG(
         "query": query,
         "top_k": top_k,
         "gated_rag": float(gated_rag),
+        "rag_dataset": retrieval_dataset,
         "retrieved_count_before_gate": len(top_k_retrieved),
         "retrieved_count": len(retrieved),
         "retrieved": retrieved,

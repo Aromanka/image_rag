@@ -33,12 +33,14 @@ INSPECSAFE_DATASET = "inspecsafe"
 CONSTRUCTIONSITE10K_DATASET = "constructionsite10k"
 LAB_SAFETY_DATASET = "lab_safety"
 LAB_SAFETY_GEN_DATASET = "lab_safety_gen"
+UNIFIED_SAFETY_DATASET = "unified_safety"
 
 SUPPORTED_RAG_DATASETS = {
     INSPECSAFE_DATASET,
     CONSTRUCTIONSITE10K_DATASET,
     LAB_SAFETY_DATASET,
     LAB_SAFETY_GEN_DATASET,
+    UNIFIED_SAFETY_DATASET,
 }
 
 TASK_TO_RAG_DATASET = {
@@ -80,6 +82,7 @@ VLM_MODEL_PATH = "/root/autodl-tmp/model/qwenvl_2_5_3B"
 
 VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 # VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_v2"
+VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_inspecsafe"
 # VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_lab_v1"
 VLM_LORA_WEIGHTS = ""
 VLM_MAX_NEW_TOKENS = 2048
