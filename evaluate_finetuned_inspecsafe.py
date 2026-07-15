@@ -286,9 +286,14 @@ def evaluate_model(
     records = []
     for start in tqdm(range(0, len(prepared), eval_batch_size), desc=desc):
         items = prepared[start : start + eval_batch_size]
+        batch_images = (
+            [item["image_inputs"] for item in items]
+            if backend == "qwen2_5_vl"
+            else [[item["image_inputs"]] for item in items]
+        )
         inputs = processor(
             text=[item["text"] for item in items],
-            images=[item["image_inputs"] for item in items],
+            images=batch_images,
             return_tensors="pt",
             padding=True,
         ).to(device)
@@ -299,8 +304,8 @@ def evaluate_model(
         )
 
         for index, item in enumerate(items):
-            real_len = inputs["attention_mask"][index].sum().item()
-            output_ids = generated[index][real_len:]
+            input_len = inputs["input_ids"].shape[1]
+            output_ids = generated[index][input_len:]
             output_text = processor.decode(
                 output_ids,
                 skip_special_tokens=True,
