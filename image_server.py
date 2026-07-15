@@ -1,4 +1,4 @@
-"""Raw-image HTTP server with request-selected accuracy and latency modes.
+"""Raw-image HTTP server with request-selected inference modes.
 
 Send image bytes directly in the POST body and select the backend with the
 required ``mode`` query parameter. No multipart form is required.
@@ -19,15 +19,17 @@ from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 
 from config import (
+    INSPECSAFE_DATASET,
+    INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS,
     INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     MAX_TOP_K,
     RESPONSE_FORWARD_TIMEOUT_SECONDS,
     RESPONSE_FORWARD_URL,
     SAFETY_JUDGEMENT_TASK,
+    SAFETY_LEVEL_TASK,
     TOP_K,
     UNIFIED_SAFETY_DATASET,
-    VLM_MAX_NEW_TOKENS,
 )
 from response_forwarding import forward_text_response
 from vlm_inference import (
@@ -42,11 +44,23 @@ from vlm_inference import (
 
 ACCURACY_MODE = "accuracy"
 LATENCY_MODE = "latency"
-SUPPORTED_MODES = {ACCURACY_MODE, LATENCY_MODE}
+ENERGY_MODE = "energy"
+BALANCED_MODE = "balanced"
+SUPPORTED_MODES = {ACCURACY_MODE, LATENCY_MODE, ENERGY_MODE, BALANCED_MODE}
+RAG_MODES = {ACCURACY_MODE, ENERGY_MODE, BALANCED_MODE}
+MODE_ALIASES = {
+    "accuracy-first": ACCURACY_MODE,
+    "latency-first": LATENCY_MODE,
+    "energy-first": ENERGY_MODE,
+    "balanced-mode": BALANCED_MODE,
+}
 ACCURACY_GATE = 0.7
 
-# Both inference modes receive this exact task prompt. Keeping it here makes
-# the HTTP service independent of the task prompts in config.py.
+# Accuracy-first follows the fine-tuned InspecSafe evaluation task. The full
+# system prompt and JSON schema are supplied by the safety-level RAG builder.
+ACCURACY_QUERY = "Inspect this industrial site image and provide your safety assessment."
+
+# Keep the existing latency-first prompt and two-stage behavior unchanged.
 SAFETY_PROMPT = """You are evaluating the overall safety condition shown in the image.
 
 Classify the image as UNSAFE only when clearly visible evidence shows an unsafe
@@ -73,6 +87,7 @@ VLM_LOCK_OPEN = True
 
 def _normalize_mode(mode: str) -> str:
     normalized = mode.strip().lower()
+    normalized = MODE_ALIASES.get(normalized, normalized)
     if normalized not in SUPPORTED_MODES:
         choices = ", ".join(sorted(SUPPORTED_MODES))
         raise ValueError(f"Unsupported mode '{mode}'. Choose one of: {choices}.")
@@ -105,14 +120,14 @@ def _run_inference(
     stage_one_max_new_tokens: int,
     stage_two_max_new_tokens: int,
 ) -> tuple[str, dict]:
-    if mode == ACCURACY_MODE:
+    if mode in RAG_MODES:
         result = VLM_inference_with_RAG(
-            SAFETY_JUDGEMENT_TASK,
+            SAFETY_LEVEL_TASK,
             image_path,
-            query=SAFETY_PROMPT,
+            query=ACCURACY_QUERY,
             top_k=top_k,
             gated_rag=ACCURACY_GATE,
-            rag_dataset=UNIFIED_SAFETY_DATASET,
+            rag_dataset=INSPECSAFE_DATASET,
             max_new_tokens=max_new_tokens,
         )
         return str(result["output"]), result
@@ -130,7 +145,7 @@ def _run_inference(
 def create_app(
     *,
     default_top_k: int = TOP_K,
-    max_new_tokens: int = VLM_MAX_NEW_TOKENS,
+    max_new_tokens: int = INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS,
     stage_one_max_new_tokens: int = INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
     stage_two_max_new_tokens: int = INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
     max_upload_mb: int = 20,
@@ -147,9 +162,9 @@ def create_app(
         from retriever import index_item_count
 
         try:
-            count = index_item_count(UNIFIED_SAFETY_DATASET)
+            count = index_item_count(INSPECSAFE_DATASET)
             print(
-                f"Unified RAG index ready: {UNIFIED_SAFETY_DATASET} "
+                f"InspecSafe RAG index ready: {INSPECSAFE_DATASET} "
                 f"({count} images)",
                 flush=True,
             )
@@ -172,7 +187,7 @@ def create_app(
 
     app = FastAPI(
         title="Image safety inference",
-        version="2.0.0",
+        version="3.0.0",
         lifespan=lifespan,
     )
 
@@ -181,8 +196,9 @@ def create_app(
         return {
             "status": "ok",
             "modes": sorted(SUPPORTED_MODES),
-            "accuracy_rag_dataset": UNIFIED_SAFETY_DATASET,
+            "accuracy_rag_dataset": INSPECSAFE_DATASET,
             "accuracy_gate": ACCURACY_GATE,
+            "placeholder_modes": sorted({ENERGY_MODE, BALANCED_MODE}),
             "lora_weights": active_lora_weights(),
         }
 
@@ -227,9 +243,9 @@ def create_app(
             print(
                 f"Inference started: mode={selected_mode} bytes={len(payload)}"
                 + (
-                    f" rag_dataset={UNIFIED_SAFETY_DATASET} "
+                    f" rag_dataset={INSPECSAFE_DATASET} "
                     f"top_k={effective_top_k} gate={ACCURACY_GATE}"
-                    if selected_mode == ACCURACY_MODE
+                    if selected_mode in RAG_MODES
                     else ""
                 ),
                 flush=True,
@@ -266,7 +282,11 @@ def create_app(
                 forward_text_response,
                 RESPONSE_FORWARD_URL,
                 output,
-                dataset=UNIFIED_SAFETY_DATASET,
+                dataset=(
+                    INSPECSAFE_DATASET
+                    if selected_mode in RAG_MODES
+                    else UNIFIED_SAFETY_DATASET
+                ),
                 inference_seconds=elapsed,
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
@@ -277,10 +297,10 @@ def create_app(
             "response": output,
             "response_time_seconds": round(elapsed, 3),
         }
-        if selected_mode == ACCURACY_MODE:
+        if selected_mode in RAG_MODES:
             response_payload.update(
                 {
-                    "rag_dataset": UNIFIED_SAFETY_DATASET,
+                    "rag_dataset": INSPECSAFE_DATASET,
                     "gated_rag": ACCURACY_GATE,
                     "retrieved_count_before_gate": result.get(
                         "retrieved_count_before_gate", 0
@@ -305,7 +325,10 @@ def create_app(
     async def infer(
         request: Request,
         background_tasks: BackgroundTasks,
-        mode: str = Query(..., description="Inference mode: accuracy or latency."),
+        mode: str = Query(
+            ...,
+            description="Inference mode: accuracy, latency, energy, or balanced.",
+        ),
         top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
     ) -> JSONResponse:
         global VLM_LOCK_OPEN
@@ -340,12 +363,16 @@ app = create_app()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Serve request-selected accuracy or latency image inference."
+        description="Serve request-selected image inference modes."
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--top-k", type=int, default=TOP_K)
-    parser.add_argument("--max-new-tokens", type=int, default=VLM_MAX_NEW_TOKENS)
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS,
+    )
     parser.add_argument(
         "--stage-one-max-new-tokens",
         type=int,

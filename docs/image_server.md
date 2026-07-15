@@ -1,40 +1,82 @@
 # Image inference server
 
-`image_server.py` is the only image-serving entry point. The server accepts raw
-image bytes and chooses the inference strategy for each request from the
-required `mode` query parameter. Backend mode is not selected at startup.
+`image_server.py` accepts raw image bytes and selects an inference strategy for
+each request through the required `mode` query parameter. The mode is selected
+per request; it is not fixed when the server starts.
 
 ## Modes
 
-| `mode` | Behavior |
-| --- | --- |
-| `accuracy` | Image RAG followed by VLM inference. Retrieval always uses the `unified_safety` index and a cosine-similarity gate of `0.7`. |
-| `latency` | Two-stage VLM-only inference. A short safe/unsafe pass runs first; the annotation pass runs only when the first pass returns unsafe. |
+| Mode | Query value | Current behavior |
+| --- | --- | --- |
+| Accuracy-first | `accuracy` | Fine-tuned InspecSafe safety-level inference with image RAG and a fixed `0.7` similarity gate. |
+| Latency-first | `latency` | Existing two-stage VLM-only inference. A short safe/unsafe pass runs first, and annotation runs only when needed. |
+| Energy-first | `energy` | Placeholder interface; currently uses the same implementation as Accuracy-first. |
+| Balanced | `balanced` | Placeholder interface; currently uses the same implementation as Accuracy-first. |
 
-Both modes use the same safety task prompt defined as `SAFETY_PROMPT` in
-`image_server.py`. Server inference does not use the default task prompts from
-`config.py`.
+The aliases `accuracy-first`, `latency-first`, `energy-first`, and
+`balanced-mode` are also accepted. Responses always report the normalized
+values `accuracy`, `latency`, `energy`, or `balanced`.
 
-## Unified accuracy index
+## Accuracy-first pipeline
 
-The accuracy index must combine all retrieval records from:
+Accuracy-first combines the configured fine-tuned model with gated InspecSafe
+image RAG:
 
-- ConstructionSite-10K
-- InspecSafe
-- LabSafety-Gen
+1. The query image is searched against the `inspecsafe` image index.
+2. The top-k results are filtered at cosine similarity `>= 0.7`.
+3. The remaining reference images and the query image are passed to the
+   configured VLM and LoRA adapter.
+4. The model returns the structured InspecSafe assessment used by
+   `evaluate_finetuned_inspecsafe.py`:
 
-Rebuild the two Chroma collections under:
-
-```text
-chroma_db/unified_safety/
+```json
+{
+  "scene_description": "<detailed scene description>",
+  "hazards": ["<canonical hazard phrase>"],
+  "overall_safety_level": "<Level I | Level II | Level III | Level IV>"
+}
 ```
 
-The directory must contain the existing `siglip2_caption_rag` and
-`siglip2_image_rag` collections. IDs must be unique across the three source
-datasets; prefixing each ID with its source dataset is recommended. The server
-reports the unified image count at startup and returns an inference error for
-`mode=accuracy` if this index is unavailable. `mode=latency` does not query the
-index.
+The system prompt and JSON schema come from
+`INSPECSAFE_SAFETY_LEVEL_SYSTEM_PROMPT` in `rag_answer.py`. That prompt is kept
+identical to `SYSTEM_PROMPT` in `evaluate_finetuned_inspecsafe.py`. The user
+instruction is:
+
+```text
+Inspect this industrial site image and provide your safety assessment.
+```
+
+The base model, processor, and optional LoRA adapter are loaded from
+`VLM_MODEL_PATH`, `VLM_PROCESSOR_PATH`, and `VLM_LORA_WEIGHTS` in `config.py`,
+using the same model-loading path as the rest of the server. The default output
+limit for these structured results is
+`INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS` (currently 384).
+
+Energy-first and Balanced currently execute this exact same pipeline. They are
+separate API modes so their implementations can be added later without another
+interface change.
+
+## InspecSafe RAG index
+
+Accuracy-first, Energy-first, and Balanced require the two Chroma collections
+under:
+
+```text
+chroma_db/inspecsafe/
+```
+
+The directory contains the existing `siglip2_caption_rag` and
+`siglip2_image_rag` collections. The server reports the InspecSafe image count
+at startup. Latency-first does not query this index.
+
+Build or rebuild it from the pipeline training data with:
+
+```bash
+python build_index.py \
+  --dataset-input data/inspecsafe_pipeline/pipeline_train.json \
+  --input-format inspecsafe_pipeline \
+  --data-root /root/autodl-tmp/data/inspecsafe/DATA_PATH
+```
 
 ## Start the server
 
@@ -42,11 +84,11 @@ index.
 python image_server.py --host 0.0.0.0 --port 8000
 ```
 
-By default, the server preloads SigLIP2 and the VLM so either request mode is
-ready. Wait for `Model loading complete. Server is ready.` before sending an
-image. The service uses one worker and accepts one inference at a time.
+By default, the server preloads SigLIP2 and the configured VLM. Wait for
+`Model loading complete. Server is ready.` before sending an image. The service
+uses one worker and accepts one inference at a time.
 
-The remaining useful startup options are:
+Available startup options include:
 
 ```text
 --top-k N
@@ -58,13 +100,13 @@ The remaining useful startup options are:
 --no-preload
 ```
 
-`--top-k` is the default number of candidates retrieved in accuracy mode. It
-does not affect latency mode. There are no `--rag`, `--dataset`, or
-`--gated-rag` startup options.
+`--top-k` and `--max-new-tokens` affect Accuracy-first, Energy-first, and
+Balanced. The two stage token limits affect only Latency-first. A per-request
+`top_k` query parameter overrides the startup default for a RAG mode.
 
 ## Send an image
 
-Accuracy mode:
+Accuracy-first:
 
 ```bash
 curl --data-binary @query.jpg \
@@ -72,7 +114,7 @@ curl --data-binary @query.jpg \
   "http://SERVER_IP:8000/infer?mode=accuracy"
 ```
 
-Latency mode:
+Latency-first:
 
 ```bash
 curl --data-binary @query.jpg \
@@ -80,34 +122,46 @@ curl --data-binary @query.jpg \
   "http://SERVER_IP:8000/infer?mode=latency"
 ```
 
-Accuracy mode optionally accepts a per-request `top_k` override:
+Energy-first and Balanced placeholders:
+
+```bash
+curl --data-binary @query.jpg \
+  -H "Content-Type: image/jpeg" \
+  "http://SERVER_IP:8000/infer?mode=energy"
+
+curl --data-binary @query.jpg \
+  -H "Content-Type: image/jpeg" \
+  "http://SERVER_IP:8000/infer?mode=balanced"
+```
+
+Per-request retrieval count override:
 
 ```bash
 curl --data-binary @query.jpg \
   "http://SERVER_IP:8000/infer?mode=accuracy&top_k=8"
 ```
 
-`mode` is required and accepts only `accuracy` or `latency`. Dataset and gate
-query parameters are no longer part of the API.
-
 ## Responses
 
-Accuracy response:
+Accuracy-first response:
 
 ```json
 {
   "status": "success",
   "mode": "accuracy",
-  "response": "<model output>",
+  "response": "{\"scene_description\":\"...\",\"hazards\":[],\"overall_safety_level\":\"Level IV\"}",
   "response_time_seconds": 2.731,
-  "rag_dataset": "unified_safety",
+  "rag_dataset": "inspecsafe",
   "gated_rag": 0.7,
   "retrieved_count_before_gate": 5,
   "retrieved_count": 2
 }
 ```
 
-Latency response:
+Energy-first and Balanced return the same fields with `mode` set to `energy`
+or `balanced`.
+
+Latency-first response:
 
 ```json
 {
@@ -137,10 +191,10 @@ forwarded.
 
 ## Health and response forwarding
 
-`GET /health` reports the supported modes, accuracy index name, fixed gate, and
-active LoRA weights.
+`GET /health` reports all four normalized modes, the InspecSafe accuracy index,
+the fixed gate, the placeholder modes, and active LoRA weights.
 
-Successful outputs are still forwarded when `RESPONSE_FORWARD_URL` is set in
+Successful outputs are forwarded when `RESPONSE_FORWARD_URL` is set in
 `config.py`. Forwarding happens after the client response and is excluded from
 `response_time_seconds`. Responses include `X-Inference-Mode`,
 `X-Inference-Seconds`, and `X-Response-Forwarding` headers.
