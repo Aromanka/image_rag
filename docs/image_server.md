@@ -107,6 +107,7 @@ Balanced. The two stage token limits affect only Latency-first. A per-request
 ## Send an image
 
 Accuracy-first:
+> If a local port transfer is activated for AutoDL server, than SERVER_IP is just `127.0.0.1`
 
 ```bash
 curl --data-binary @query.jpg \
