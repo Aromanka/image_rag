@@ -86,6 +86,88 @@ class ImageServerModeTests(unittest.TestCase):
             stage_two_max_new_tokens=128,
         )
 
+    def test_accuracy_parser_uses_hazards_and_scene_description(self) -> None:
+        safe_output = (
+            '{"scene_description":"No hazards are visible.",'
+            '"hazards":[],"overall_safety_level":"Level IV"}'
+        )
+        unsafe_output = (
+            'prefix {"scene_description":"Smoke is visible.",'
+            '"hazards":["smoke"],"overall_safety_level":"Level I"} suffix'
+        )
+
+        self.assertEqual(
+            image_server._parse_accuracy_response(safe_output),
+            {"safe": "safe", "annotation": "No hazards are visible."},
+        )
+        self.assertEqual(
+            image_server._parse_accuracy_response(unsafe_output),
+            {"safe": "unsafe", "annotation": "Smoke is visible."},
+        )
+
+    def test_accuracy_parser_treats_missing_or_invalid_hazards_as_unsafe(self) -> None:
+        self.assertEqual(
+            image_server._parse_accuracy_response(
+                '{"scene_description":"Unstructured hazards."}'
+            ),
+            {"safe": "unsafe", "annotation": "Unstructured hazards."},
+        )
+        self.assertEqual(
+            image_server._parse_accuracy_response("not JSON"),
+            {"safe": "unsafe", "annotation": ""},
+        )
+
+    def test_latency_parser_removes_only_one_leading_label(self) -> None:
+        cases = {
+            "safe": {"safe": "safe", "annotation": ""},
+            "SAFE   Normal operation.": {
+                "safe": "safe",
+                "annotation": "Normal operation.",
+            },
+            "unsafe unsafe Smoke is visible.": {
+                "safe": "unsafe",
+                "annotation": "unsafe Smoke is visible.",
+            },
+            "Smoke is visible.": {
+                "safe": "unsafe",
+                "annotation": "Smoke is visible.",
+            },
+        }
+        for output, expected in cases.items():
+            with self.subTest(output=output):
+                self.assertEqual(image_server._parse_latency_response(output), expected)
+
+    def test_each_mode_has_an_independent_parser_entry(self) -> None:
+        expected_parsers = {
+            image_server.ACCURACY_MODE: image_server._parse_accuracy_response,
+            image_server.LATENCY_MODE: image_server._parse_latency_response,
+            image_server.ENERGY_MODE: image_server._parse_energy_response,
+            image_server.BALANCED_MODE: image_server._parse_balanced_response,
+        }
+        self.assertEqual(image_server.MODE_RESPONSE_PARSERS, expected_parsers)
+        self.assertIsNot(
+            image_server.MODE_RESPONSE_PARSERS[image_server.ENERGY_MODE],
+            image_server.MODE_RESPONSE_PARSERS[image_server.ACCURACY_MODE],
+        )
+        self.assertIsNot(
+            image_server.MODE_RESPONSE_PARSERS[image_server.BALANCED_MODE],
+            image_server.MODE_RESPONSE_PARSERS[image_server.ACCURACY_MODE],
+        )
+
+    def test_success_payload_contains_unified_semantic_fields(self) -> None:
+        payload = image_server._build_success_response_payload(
+            image_server.ACCURACY_MODE,
+            '{"scene_description":"Normal scene.","hazards":[]}',
+            {"retrieved_count_before_gate": 5, "retrieved_count": 2},
+            1.2345,
+        )
+
+        self.assertEqual(payload["safe"], "safe")
+        self.assertEqual(payload["annotation"], "Normal scene.")
+        self.assertEqual(payload["response_time_seconds"], 1.234)
+        self.assertEqual(payload["retrieved_count_before_gate"], 5)
+        self.assertEqual(payload["retrieved_count"], 2)
+
     def test_accuracy_system_prompt_matches_finetuned_evaluator(self) -> None:
         project_root = Path(__file__).resolve().parent
 

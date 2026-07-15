@@ -32,6 +32,7 @@ from config import (
     UNIFIED_SAFETY_DATASET,
 )
 from response_forwarding import forward_text_response
+from utils.evaluate_utils import extract_inspecsafe_safety_level_json
 from vlm_inference import (
     VLM_inference_two_stage,
     VLM_inference_with_RAG,
@@ -111,6 +112,78 @@ def _format_latency_response(result: dict) -> str:
     return f"unsafe {annotation}" if annotation else "unsafe"
 
 
+def _parse_accuracy_response(output: str) -> dict[str, str]:
+    parsed = extract_inspecsafe_safety_level_json(output)
+    hazards = parsed.get("hazards") if parsed is not None else None
+    scene_description = parsed.get("scene_description") if parsed is not None else ""
+    annotation = str(scene_description or "").strip()
+    return {
+        "safe": "safe" if isinstance(hazards, list) and not hazards else "unsafe",
+        "annotation": annotation,
+    }
+
+
+def _parse_latency_response(output: str) -> dict[str, str]:
+    stripped = str(output).strip()
+    parts = stripped.split(maxsplit=1)
+    first_word = parts[0].lower() if parts else ""
+    if first_word in {"safe", "unsafe"}:
+        annotation = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        annotation = stripped
+    return {
+        "safe": "safe" if first_word == "safe" else "unsafe",
+        "annotation": annotation,
+    }
+
+
+def _parse_energy_response(output: str) -> dict[str, str]:
+    return _parse_accuracy_response(output)
+
+
+def _parse_balanced_response(output: str) -> dict[str, str]:
+    return _parse_accuracy_response(output)
+
+
+MODE_RESPONSE_PARSERS = {
+    ACCURACY_MODE: _parse_accuracy_response,
+    LATENCY_MODE: _parse_latency_response,
+    ENERGY_MODE: _parse_energy_response,
+    BALANCED_MODE: _parse_balanced_response,
+}
+
+
+def _parse_mode_response(mode: str, output: str) -> dict[str, str]:
+    return MODE_RESPONSE_PARSERS[mode](output)
+
+
+def _build_success_response_payload(
+    mode: str,
+    output: str,
+    result: dict,
+    elapsed: float,
+) -> dict[str, object]:
+    response_payload: dict[str, object] = {
+        "status": "success",
+        "mode": mode,
+        **_parse_mode_response(mode, output),
+        "response": output,
+        "response_time_seconds": round(elapsed, 3),
+    }
+    if mode in RAG_MODES:
+        response_payload.update(
+            {
+                "rag_dataset": INSPECSAFE_DATASET,
+                "gated_rag": ACCURACY_GATE,
+                "retrieved_count_before_gate": result.get(
+                    "retrieved_count_before_gate", 0
+                ),
+                "retrieved_count": result.get("retrieved_count", 0),
+            }
+        )
+    return response_payload
+
+
 def _run_inference(
     *,
     image_path: Path,
@@ -169,7 +242,7 @@ def create_app(
                 flush=True,
             )
         except RuntimeError as exc:
-            print(f"Unified RAG index unavailable: {exc}", flush=True)
+            print(f"InspecSafe RAG index unavailable: {exc}", flush=True)
 
         if preload:
             print("Loading SigLIP2 and VLM models...", flush=True)
@@ -291,23 +364,12 @@ def create_app(
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
 
-        response_payload: dict[str, object] = {
-            "status": "success",
-            "mode": selected_mode,
-            "response": output,
-            "response_time_seconds": round(elapsed, 3),
-        }
-        if selected_mode in RAG_MODES:
-            response_payload.update(
-                {
-                    "rag_dataset": INSPECSAFE_DATASET,
-                    "gated_rag": ACCURACY_GATE,
-                    "retrieved_count_before_gate": result.get(
-                        "retrieved_count_before_gate", 0
-                    ),
-                    "retrieved_count": result.get("retrieved_count", 0),
-                }
-            )
+        response_payload = _build_success_response_payload(
+            selected_mode,
+            output,
+            result,
+            elapsed,
+        )
 
         return JSONResponse(
             response_payload,
@@ -338,6 +400,8 @@ def create_app(
                 {
                     "status": "BUSY",
                     "mode": mode,
+                    "safe": "",
+                    "annotation": "",
                     "response": "",
                     "response_time_seconds": "",
                 },

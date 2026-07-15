@@ -143,13 +143,35 @@ curl --data-binary @query.jpg \
 
 ## Responses
 
+Every successful mode returns the same two semantic fields:
+
+- `safe`: the string `safe` or `unsafe`.
+- `annotation`: the normalized scene annotation, without a leading safety
+  label.
+
+The original model text remains available in `response` for debugging and
+backward compatibility. Each mode has a separate parser:
+
+| Mode | `safe` parser | `annotation` parser |
+| --- | --- | --- |
+| Accuracy-first | `safe` only when the parsed `hazards` list is empty; otherwise `unsafe`. | Parsed `scene_description`. |
+| Latency-first | `safe` only when the first response word is `safe` (case-insensitive); otherwise `unsafe`. | Remove one leading `safe` or `unsafe` word when present; preserve all remaining text. |
+| Energy-first | Currently the same semantics as Accuracy-first, through its own parser entry. | Parsed `scene_description`. |
+| Balanced | Currently the same semantics as Accuracy-first, through its own parser entry. | Parsed `scene_description`. |
+
+An invalid Accuracy-style JSON response or a non-list/missing `hazards` value
+is treated conservatively as `unsafe`; its `annotation` is empty unless a
+`scene_description` was parsed.
+
 Accuracy-first response:
 
 ```json
 {
   "status": "success",
   "mode": "accuracy",
-  "response": "{\"scene_description\":\"...\",\"hazards\":[],\"overall_safety_level\":\"Level IV\"}",
+  "safe": "safe",
+  "annotation": "No hazards are visible in the inspection scene.",
+  "response": "{\"scene_description\":\"No hazards are visible in the inspection scene.\",\"hazards\":[],\"overall_safety_level\":\"Level IV\"}",
   "response_time_seconds": 2.731,
   "rag_dataset": "inspecsafe",
   "gated_rag": 0.7,
@@ -167,13 +189,16 @@ Latency-first response:
 {
   "status": "success",
   "mode": "latency",
-  "response": "safe",
+  "safe": "unsafe",
+  "annotation": "Smoke is visible near the equipment.",
+  "response": "unsafe Smoke is visible near the equipment.",
   "response_time_seconds": 0.842
 }
 ```
 
-An unsafe latency result is returned as `unsafe <short annotation>` when the
-second stage supplies an annotation.
+For example, the raw latency output `unsafe unsafe Smoke is visible.` produces
+`safe: "unsafe"` and `annotation: "unsafe Smoke is visible."`; only the first
+label word is removed.
 
 While the model is occupied, another request returns HTTP 200 immediately:
 
@@ -181,6 +206,8 @@ While the model is occupied, another request returns HTTP 200 immediately:
 {
   "status": "BUSY",
   "mode": "accuracy",
+  "safe": "",
+  "annotation": "",
   "response": "",
   "response_time_seconds": ""
 }
