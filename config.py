@@ -84,7 +84,6 @@ VLM_PROCESSOR_PATH = VLM_MODEL_PATH
 # VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_v2"
 VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_inspecsafe"
 # VLM_LORA_WEIGHTS = "lora_weights/gemma3_4b_lora_lab_v1"
-VLM_LORA_WEIGHTS = ""
 VLM_MAX_NEW_TOKENS = 2048
 VLM_USE_FLASH_ATTENTION = False
 
