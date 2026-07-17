@@ -159,6 +159,65 @@ Install the repository requirements on the local computer. Tkinter must also be
 available (it is included in standard Windows and macOS Python distributions;
 on some Linux distributions it is a separate OS package).
 
+### Export a portable dataset subset
+
+`utils/export_local_test_data.py` copies selected images and rewrites their
+annotations into a self-contained directory that can be transferred to the
+display computer. By default it exports both supported datasets. For example,
+this exports 20 reproducibly shuffled test samples from each dataset:
+
+```bash
+python utils/export_local_test_data.py \
+  --output-dir data/local_test_batch \
+  --split test \
+  --shuffle \
+  --seed 42 \
+  --limit 20 \
+  --inspecsafe-image-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
+  --labsafety-image-root data/lab_safety_gen
+```
+
+`--limit` applies independently to each selected dataset. Use one or more
+`--dataset` options when only one dataset is needed. Exact entries can be
+selected in a defined order by repeating the dataset-specific ID options:
+
+```bash
+python utils/export_local_test_data.py \
+  --output-dir data/local_test_exact \
+  --inspecsafe-id 'test__oil_chemical-Level01-example__frame-001' \
+  --inspecsafe-id 'test__oil_chemical-Level04-example__frame-002' \
+  --labsafety-id 'ls_bench_0021__02'
+```
+
+For InspecSafe pipeline records without an explicit `id`, the selectable ID is
+the stem of the stored flattened image path. For LabSafety-Gen it is `image_id`.
+The output directory is never overwritten. A failed export is cleaned up before
+the final directory is created.
+
+```text
+local_test_batch/
+├── manifest.json
+├── inspecsafe_safety_level/
+│   ├── annotations.json
+│   └── images/{split}/...
+└── labsafety_gen/
+    ├── annotations.jsonl
+    └── images/{split}/...
+```
+
+`manifest.json` records selection settings, original paths, copied paths, file
+sizes, and SHA-256 checksums. The exporter reloads both generated annotation
+files before finishing, ensuring they are compatible with the display client.
+After copying this directory to the local computer, use the dataset subdirectory
+as `--image-root`, for example:
+
+```powershell
+python utils/local_test_display.py `
+  --dataset labsafety_gen `
+  --annotations D:/local_test_batch/labsafety_gen/annotations.jsonl `
+  --image-root D:/local_test_batch/labsafety_gen
+```
+
 For the InspecSafe safety-level test split, `--image-root` can point either to
 the original InspecSafe `DATA_PATH` tree or to a legacy flat directory containing
 the pipeline images:

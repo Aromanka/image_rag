@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -27,6 +27,11 @@ class DisplaySample:
     source_image: str
     ground_truth: dict[str, Any]
     metadata: dict[str, Any]
+    source_annotation: dict[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -67,6 +72,7 @@ def load_display_samples(
     image_root: Path | None,
     split: str = "test",
     skip_missing: bool = True,
+    sample_ids: set[str] | None = None,
 ) -> tuple[list[DisplaySample], int]:
     """Load display samples and return ``(samples, missing_image_count)``."""
     normalized = normalize_dataset(dataset)
@@ -90,6 +96,8 @@ def load_display_samples(
         if normalized_split != "all" and sample_split != normalized_split:
             continue
         sample = adapter(raw_sample, index, annotations_path, image_root)
+        if sample_ids is not None and sample.sample_id not in sample_ids:
+            continue
         if not sample.image_path.is_file():
             missing += 1
             if skip_missing:
@@ -161,6 +169,7 @@ def _adapt_inspecsafe_sample(
         source_image=source_image,
         ground_truth=ground_truth,
         metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        source_annotation=dict(sample),
     )
 
 
@@ -214,6 +223,7 @@ def _adapt_labsafety_sample(
         source_image=source_image,
         ground_truth=ground_truth,
         metadata=metadata,
+        source_annotation=dict(sample),
     )
 
 
