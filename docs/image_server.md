@@ -98,11 +98,139 @@ Available startup options include:
 --max-upload-mb N
 --lora-weights PATH
 --no-preload
+--local-test
+--local-test-token TOKEN
+--local-test-dataset {inspecsafe_safety_level,labsafety_gen}
+--local-test-history-size N
 ```
 
 `--top-k` and `--max-new-tokens` affect Accuracy-first, Energy-first, and
 Balanced. The two stage token limits affect only Latency-first. A per-request
 `top_k` query parameter overrides the startup default for a RAG mode.
+
+## Local display test mode
+
+Local test mode is opt-in and does not change any inference backend or mode.
+It adds a WebSocket completion channel at `/local-test/ws`. The local display
+computer makes the outbound connection, so that computer does not need a public
+IP or an inbound firewall rule.
+
+The experiment flow is:
+
+1. The display client loads a local dataset and shows its first image.
+2. A successful `/infer` request finishes on the server.
+3. The server sends one `inference.completed` event containing the complete
+   HTTP result plus query metadata.
+4. The client associates the event with the image currently on screen, switches
+   immediately to its preloaded next image, and appends the previous image's
+   ground truth and server result to JSONL.
+
+`BUSY` responses and rejected/failed inference requests do not advance the
+display. Recent completion events are retained in server memory and replayed
+when the same client reconnects. Events are assigned UUIDs and the client
+de-duplicates them before writing, so a short disconnect does not normally lose
+or duplicate a trial. The history is reset when `image_server.py` restarts.
+
+### Start the server in local test mode
+
+Using a shared token is recommended whenever the WebSocket port is reachable by
+another machine. The environment variable avoids putting the token directly in
+shell history:
+
+```bash
+export IMAGE_RAG_LOCAL_TEST_TOKEN='mde450'
+
+python image_server.py \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --local-test \
+  --local-test-dataset inspecsafe_safety_level
+```
+
+The dataset startup option is an association hint only; it does not select or
+modify Accuracy/Latency/Energy/Balanced inference. It can be omitted when the
+display client alone controls the dataset. `GET /health` reports whether local
+test mode is enabled, the number of display connections, token requirement,
+default dataset, and replay history capacity without exposing the token.
+
+### Start the local fullscreen display
+
+Install the repository requirements on the local computer. Tkinter must also be
+available (it is included in standard Windows and macOS Python distributions;
+on some Linux distributions it is a separate OS package).
+
+For the InspecSafe safety-level test split, `--image-root` can point either to
+the original InspecSafe `DATA_PATH` tree or to a legacy flat directory containing
+the pipeline images:
+
+```powershell
+$env:IMAGE_RAG_LOCAL_TEST_TOKEN = 'mde450'
+
+python utils/local_test_display.py `
+  --server "ws://SERVER_IP:8000/local-test/ws" `
+  --dataset inspecsafe_safety_level `
+  --annotations data/inspecsafe_pipeline/pipeline_test.json `
+  --image-root D:/datasets/InspecSafe/DATA_PATH `
+  --output save/local_test_inspecsafe.jsonl
+```
+
+For LabSafety-Gen, point `--image-root` to the directory containing the
+`images/` tree. The repository default is `data/lab_safety_gen`:
+
+```powershell
+python utils/local_test_display.py `
+  --server "ws://SERVER_IP:8000/local-test/ws" `
+  --dataset labsafety_gen `
+  --annotations data/lab_safety_gen/annotations.jsonl `
+  --image-root data/lab_safety_gen `
+  --output save/local_test_labsafety.jsonl
+```
+
+The viewer is fullscreen by default. Press `Esc` to exit or `F11` to toggle
+fullscreen. The next image is decoded and resized while the current image is
+displayed. JSONL writes happen on a separate thread after the screen changes.
+Useful client options include:
+
+```text
+--split {train,test,all}
+--shuffle --seed N
+--offset N --limit N
+--loop
+--windowed
+--strict-images
+--fsync
+```
+
+Missing local image files are skipped with a count by default; `--strict-images`
+makes the client fail on the first missing file. `--fsync` requests a disk sync
+for every result record, trading some disk activity for stronger durability.
+
+If SSH is the only route to the server, open a local port forward first and use
+the default `ws://127.0.0.1:8000/local-test/ws` URL:
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 USER@SERVER
+```
+
+For a directly exposed connection, prefer `wss://` behind TLS. A token sent over
+plain `ws://` is not encrypted.
+
+### Optional trial association hints
+
+The normal display-driven workflow associates results sequentially and requires
+no `/infer` changes. If the query producer knows the displayed sample, it may
+send hints for mismatch detection:
+
+```bash
+curl --data-binary @query.jpg \
+  "http://SERVER_IP:8000/infer?mode=accuracy&local_test_dataset=inspecsafe_safety_level&local_test_sample_id=SAMPLE_ID"
+```
+
+Hints are stored under `server_query` in JSONL. The record's `association` is
+`matched_hint`, `sample_id_mismatch`, `dataset_mismatch`, or `sequential`.
+Each JSONL record also contains the complete local sample metadata and ground
+truth, display timestamps/duration, event sequence and UUID, query SHA-256, and
+the full normalized server result.
 
 ## Send an image
 

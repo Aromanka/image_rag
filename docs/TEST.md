@@ -26,12 +26,13 @@ Skip installation when dependencies are already available. Replace
 These checks do not load the local models.
 
 ```bash
-python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retrieval_gating.py retriever.py two_stage_inference.py vlm_inference.py evaluate_inspecsafe.py evaluate_inspecsafe_safety_level.py
+python -m compileall app.py build_index.py config.py embedding.py rag_answer.py retrieval_gating.py retriever.py two_stage_inference.py vlm_inference.py image_server.py utils/local_test_channel.py utils/local_test_data.py utils/local_test_display.py evaluate_inspecsafe.py evaluate_inspecsafe_safety_level.py
 python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety judgement'))"
 python -c "from vlm_inference import build_baseline_prompt; print(build_baseline_prompt('safety level'))"
 python -m unittest test_two_stage_inference.py
 python -m unittest test_retrieval_gating.py
 python -m unittest test_inspecsafe_safety_level.py
+python -m unittest test_local_test_mode.py test_image_server_modes.py
 ```
 
 The printed prompt should contain:

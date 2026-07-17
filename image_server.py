@@ -8,12 +8,25 @@ from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import hashlib
 from io import BytesIO
+import os
 from pathlib import Path
 import tempfile
 import time
+from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
@@ -33,6 +46,8 @@ from config import (
 )
 from response_forwarding import forward_text_response
 from utils.evaluate_utils import extract_inspecsafe_safety_level_json
+from utils.local_test_channel import LocalTestHub
+from utils.local_test_data import SUPPORTED_LOCAL_TEST_DATASETS, normalize_dataset
 from vlm_inference import (
     VLM_inference_two_stage,
     VLM_inference_with_RAG,
@@ -84,6 +99,34 @@ IMAGE_SUFFIXES = {
 # One worker owns one model. Requests received while inference is active return
 # BUSY immediately instead of accumulating in GPU memory.
 VLM_LOCK_OPEN = True
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_local_test_event(
+    *,
+    payload: bytes,
+    content_type: str | None,
+    dataset: str | None,
+    sample_id: str | None,
+    response_payload: dict[str, object],
+) -> dict[str, object]:
+    """Build the versioned completion event sent to local display clients."""
+    return {
+        "type": "inference.completed",
+        "event_id": str(uuid4()),
+        "completed_at": _utc_now_iso(),
+        "query": {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+            "content_type": content_type,
+            "dataset": dataset,
+            "sample_id": sample_id,
+        },
+        "result": response_payload,
+    }
 
 
 def _normalize_mode(mode: str) -> str:
@@ -224,11 +267,23 @@ def create_app(
     max_upload_mb: int = 20,
     preload: bool = True,
     lora_weights: str | Path | None = None,
+    local_test_mode: bool = False,
+    local_test_token: str | None = None,
+    local_test_dataset: str | None = None,
+    local_test_history_size: int = 1024,
 ) -> FastAPI:
     if lora_weights is not None:
         configure_lora_weights(lora_weights)
 
     max_upload_bytes = max_upload_mb * 1024 * 1024
+    normalized_local_test_dataset = (
+        normalize_dataset(local_test_dataset) if local_test_dataset else None
+    )
+    local_test_hub = LocalTestHub(
+        enabled=local_test_mode,
+        token=local_test_token,
+        history_size=local_test_history_size,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -256,6 +311,15 @@ def create_app(
             print(f"LoRA weights enabled: {active_lora_weights()}", flush=True)
         else:
             print("LoRA weights disabled.", flush=True)
+        if local_test_hub.enabled:
+            auth_status = "token required" if local_test_hub.auth_required else "no token"
+            print(
+                "Local test mode enabled: ws://<server>/local-test/ws "
+                f"({auth_status}, dataset={normalized_local_test_dataset or 'client-selected'})",
+                flush=True,
+            )
+        else:
+            print("Local test mode disabled.", flush=True)
         yield
 
     app = FastAPI(
@@ -263,6 +327,7 @@ def create_app(
         version="3.0.0",
         lifespan=lifespan,
     )
+    app.state.local_test_hub = local_test_hub
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -273,17 +338,70 @@ def create_app(
             "accuracy_gate": ACCURACY_GATE,
             "placeholder_modes": sorted({ENERGY_MODE, BALANCED_MODE}),
             "lora_weights": active_lora_weights(),
+            "local_test": {
+                "enabled": local_test_hub.enabled,
+                "websocket_path": "/local-test/ws",
+                "connected_clients": local_test_hub.connection_count,
+                "default_dataset": normalized_local_test_dataset,
+                "auth_required": local_test_hub.auth_required,
+                "history_size": local_test_hub.history_size,
+            },
         }
+
+    @app.websocket("/local-test/ws")
+    async def local_test_websocket(
+        websocket: WebSocket,
+        token: str | None = Query(default=None),
+        after_sequence: int = Query(default=-1, ge=-1),
+        server_instance_id: str | None = Query(default=None),
+    ) -> None:
+        if not local_test_hub.enabled:
+            await websocket.close(code=1008, reason="Local test mode is disabled.")
+            return
+        if not local_test_hub.is_authorized(token):
+            await websocket.accept()
+            await websocket.close(code=1008, reason="Invalid local test token.")
+            return
+
+        try:
+            await local_test_hub.connect(
+                websocket,
+                after_sequence=after_sequence,
+                client_instance_id=server_instance_id,
+            )
+            while True:
+                # The client need not send application messages. Receiving here
+                # detects clean disconnects while protocol ping/pong is handled
+                # by the WebSocket implementation.
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await local_test_hub.disconnect(websocket)
 
     async def _infer_unlocked(
         request: Request,
         background_tasks: BackgroundTasks,
         mode: str,
         top_k: int | None,
+        local_test_dataset_hint: str | None,
+        local_test_sample_id: str | None,
     ) -> JSONResponse:
         request_started = time.perf_counter()
         try:
             selected_mode = _normalize_mode(mode)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+        try:
+            event_dataset = (
+                normalize_dataset(local_test_dataset_hint)
+                if local_test_dataset_hint
+                else normalized_local_test_dataset
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -350,6 +468,26 @@ def create_app(
 
         elapsed = time.perf_counter() - request_started
         print(f"Inference result ({elapsed:.3f}s):\n{output}\n", flush=True)
+        response_payload = _build_success_response_payload(
+            selected_mode,
+            output,
+            result,
+            elapsed,
+        )
+
+        # Schedule display notification first so an unrelated HTTP forwarder
+        # cannot delay the local image transition.
+        if local_test_hub.enabled:
+            background_tasks.add_task(
+                local_test_hub.publish,
+                _build_local_test_event(
+                    payload=payload,
+                    content_type=request.headers.get("content-type"),
+                    dataset=event_dataset,
+                    sample_id=local_test_sample_id,
+                    response_payload=response_payload,
+                ),
+            )
         if RESPONSE_FORWARD_URL:
             background_tasks.add_task(
                 forward_text_response,
@@ -364,13 +502,6 @@ def create_app(
                 timeout_seconds=RESPONSE_FORWARD_TIMEOUT_SECONDS,
             )
 
-        response_payload = _build_success_response_payload(
-            selected_mode,
-            output,
-            result,
-            elapsed,
-        )
-
         return JSONResponse(
             response_payload,
             headers={
@@ -378,6 +509,9 @@ def create_app(
                 "X-Inference-Seconds": f"{elapsed:.3f}",
                 "X-Response-Forwarding": (
                     "scheduled" if RESPONSE_FORWARD_URL else "disabled"
+                ),
+                "X-Local-Test-Notification": (
+                    "scheduled" if local_test_hub.enabled else "disabled"
                 ),
             },
             background=background_tasks,
@@ -392,6 +526,15 @@ def create_app(
             description="Inference mode: accuracy, latency, energy, or balanced.",
         ),
         top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
+        local_test_dataset: str | None = Query(
+            default=None,
+            description="Optional display dataset association hint.",
+        ),
+        local_test_sample_id: str | None = Query(
+            default=None,
+            max_length=256,
+            description="Optional display sample ID association hint.",
+        ),
     ) -> JSONResponse:
         global VLM_LOCK_OPEN
 
@@ -415,7 +558,14 @@ def create_app(
 
         VLM_LOCK_OPEN = False
         try:
-            return await _infer_unlocked(request, background_tasks, mode, top_k)
+            return await _infer_unlocked(
+                request,
+                background_tasks,
+                mode,
+                top_k,
+                local_test_dataset,
+                local_test_sample_id,
+            )
         finally:
             VLM_LOCK_OPEN = True
 
@@ -453,6 +603,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Load models on the first request instead of at startup.",
     )
+    parser.add_argument(
+        "--local-test",
+        action="store_true",
+        help="Enable the /local-test/ws inference-completion channel.",
+    )
+    parser.add_argument(
+        "--local-test-token",
+        default=os.environ.get("IMAGE_RAG_LOCAL_TEST_TOKEN"),
+        help="Optional WebSocket shared token (or IMAGE_RAG_LOCAL_TEST_TOKEN).",
+    )
+    parser.add_argument(
+        "--local-test-dataset",
+        choices=sorted(SUPPORTED_LOCAL_TEST_DATASETS),
+        default=None,
+        help="Default dataset hint included in local-test completion events.",
+    )
+    parser.add_argument(
+        "--local-test-history-size",
+        type=int,
+        default=1024,
+        help="Number of recent completion events retained for reconnect replay.",
+    )
     add_lora_cli_arg(parser)
     return parser.parse_args()
 
@@ -471,6 +643,8 @@ if __name__ == "__main__":
         raise SystemExit("--stage-two-max-new-tokens must be at least 1.")
     if args.max_upload_mb < 1:
         raise SystemExit("--max-upload-mb must be at least 1.")
+    if args.local_test_history_size < 1:
+        raise SystemExit("--local-test-history-size must be at least 1.")
 
     uvicorn.run(
         create_app(
@@ -481,6 +655,10 @@ if __name__ == "__main__":
             max_upload_mb=args.max_upload_mb,
             preload=not args.no_preload,
             lora_weights=args.lora_weights,
+            local_test_mode=args.local_test,
+            local_test_token=args.local_test_token,
+            local_test_dataset=args.local_test_dataset,
+            local_test_history_size=args.local_test_history_size,
         ),
         host=args.host,
         port=args.port,

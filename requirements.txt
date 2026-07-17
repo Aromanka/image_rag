@@ -15,4 +15,5 @@ timm
 tqdm
 transformers>=4.50.0,<5.0
 uvicorn
+websockets
 sentence-transformer

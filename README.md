@@ -175,9 +175,10 @@ id,image_path,caption,safe_label
 | `two_stage_inference.py` | 可独立测试的 InspecSafe 两阶段提示、标签解析和门控决策策略 |
 | `vlm_inference.py` | VLM 后端选择、Baseline/RAG/两阶段推理入口、模型缓存与批量 CLI |
 | `app.py` | 完整 JSON FastAPI：检索、prompt 构造和 VLM 推理 |
-| `image_server.py` | 接收原始图片字节的轻量服务；预加载、串行 GPU 推理和可选结果转发 |
+| `image_server.py` | 接收原始图片字节的轻量服务；预加载、串行 GPU 推理、可选结果转发和本地测试 WebSocket 通知 |
 | `response_forwarding.py` | 推理结束后异步 POST 文本结果，失败不影响主请求 |
 | `response_receiver.py` | 用标准库实现的结果接收与落盘测试服务器 |
+| `utils/local_test_display.py` | 本地测试全屏图像显示、WebSocket 自动重连与 ground truth/结果 JSONL 记录 |
 | `evaluate_*.py` | 四项任务的 Baseline/RAG 批量推理与指标计算 |
 | `utils/evaluate_utils.py` | 标签解析、混淆矩阵、规则指标、ROUGE-L 与 SBERT 等公共评估逻辑 |
 | `utils/evaluate_rag_details.py` | 从评估 JSON 导出查询图、检索图、prompt、预测和真值，便于案例分析 |
