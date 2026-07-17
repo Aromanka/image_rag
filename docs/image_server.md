@@ -100,7 +100,6 @@ Available startup options include:
 --no-preload
 --local-test
 --local-test-token TOKEN
---local-test-dataset {inspecsafe_safety_level,labsafety_gen}
 --local-test-history-size N
 ```
 
@@ -143,15 +142,13 @@ export IMAGE_RAG_LOCAL_TEST_TOKEN='mde450'
 python image_server.py \
   --host 0.0.0.0 \
   --port 8000 \
-  --local-test \
-  --local-test-dataset inspecsafe_safety_level
+  --local-test
 ```
 
-The dataset startup option is an association hint only; it does not select or
-modify Accuracy/Latency/Energy/Balanced inference. It can be omitted when the
-display client alone controls the dataset. `GET /health` reports whether local
-test mode is enabled, the number of display connections, token requirement,
-default dataset, and replay history capacity without exposing the token.
+The server does not select a local display dataset. The portable batch on the
+display computer owns all image and ground-truth data. `GET /health` reports
+whether local test mode is enabled, the number of display connections, token
+requirement, and replay history capacity without exposing the token.
 
 ### Start the local fullscreen display
 
@@ -163,12 +160,13 @@ on some Linux distributions it is a separate OS package).
 
 `utils/export_local_test_data.py` copies selected images and rewrites their
 annotations into a self-contained directory that can be transferred to the
-display computer. By default it exports both supported datasets. For example,
+display computer. The default output is always `data/local_test_batch` (written
+as `data\local_test_batch` on Windows), and both supported datasets are exported
+together. There is no need to specify `--output-dir` or `--dataset`. For example,
 this exports 20 reproducibly shuffled test samples from each dataset:
 
 ```bash
 python utils/export_local_test_data.py \
-  --output-dir data/local_test_batch \
   --split test \
   --shuffle \
   --seed 42 \
@@ -177,13 +175,11 @@ python utils/export_local_test_data.py \
   --labsafety-image-root data/lab_safety_gen
 ```
 
-`--limit` applies independently to each selected dataset. Use one or more
-`--dataset` options when only one dataset is needed. Exact entries can be
-selected in a defined order by repeating the dataset-specific ID options:
+`--limit` applies independently to both datasets. Exact entries can be selected
+in a defined order by repeating the dataset-specific ID options:
 
 ```bash
 python utils/export_local_test_data.py \
-  --output-dir data/local_test_exact \
   --inspecsafe-id 'test__oil_chemical-Level01-example__frame-001' \
   --inspecsafe-id 'test__oil_chemical-Level04-example__frame-002' \
   --labsafety-id 'ls_bench_0021__02'
@@ -192,10 +188,11 @@ python utils/export_local_test_data.py \
 For InspecSafe pipeline records without an explicit `id`, the selectable ID is
 the stem of the stored flattened image path. For LabSafety-Gen it is `image_id`.
 The output directory is never overwritten. A failed export is cleaned up before
-the final directory is created.
+the final directory is created. Rename or remove an earlier
+`data/local_test_batch` before producing a new batch.
 
 ```text
-local_test_batch/
+data/local_test_batch/
 ├── manifest.json
 ├── inspecsafe_safety_level/
 │   ├── annotations.json
@@ -208,40 +205,32 @@ local_test_batch/
 `manifest.json` records selection settings, original paths, copied paths, file
 sizes, and SHA-256 checksums. The exporter reloads both generated annotation
 files before finishing, ensuring they are compatible with the display client.
-After copying this directory to the local computer, use the dataset subdirectory
-as `--image-root`, for example:
+After copying `data/local_test_batch` to the local computer, use the relevant
+batch subdirectory as `--image-root`, for example:
 
 ```powershell
 python utils/local_test_display.py `
-  --dataset labsafety_gen `
-  --annotations D:/local_test_batch/labsafety_gen/annotations.jsonl `
-  --image-root D:/local_test_batch/labsafety_gen
+  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl `
+  --image-root data/local_test_batch/labsafety_gen
 ```
 
-For the InspecSafe safety-level test split, `--image-root` can point either to
-the original InspecSafe `DATA_PATH` tree or to a legacy flat directory containing
-the pipeline images:
+For InspecSafe:
 
 ```powershell
-$env:IMAGE_RAG_LOCAL_TEST_TOKEN = 'mde450'
-
-python utils/local_test_display.py `
-  --server "ws://SERVER_IP:8000/local-test/ws" `
-  --dataset inspecsafe_safety_level `
-  --annotations data/inspecsafe_pipeline/pipeline_test.json `
-  --image-root D:/datasets/InspecSafe/DATA_PATH `
+python utils/local_test_display.py \
+  --server "ws://SERVER_IP:8000/local-test/ws" \
+  --annotations data/local_test_batch/inspecsafe_safety_level/annotations.json \
+  --image-root data/local_test_batch/inspecsafe_safety_level \
   --output save/local_test_inspecsafe.jsonl
 ```
 
-For LabSafety-Gen, point `--image-root` to the directory containing the
-`images/` tree. The repository default is `data/lab_safety_gen`:
+For LabSafety-Gen:
 
 ```powershell
 python utils/local_test_display.py `
   --server "ws://SERVER_IP:8000/local-test/ws" `
-  --dataset labsafety_gen `
-  --annotations data/lab_safety_gen/annotations.jsonl `
-  --image-root data/lab_safety_gen `
+  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl `
+  --image-root data/local_test_batch/labsafety_gen `
   --output save/local_test_labsafety.jsonl
 ```
 
@@ -282,7 +271,7 @@ send hints for mismatch detection:
 
 ```bash
 curl --data-binary @query.jpg \
-  "http://SERVER_IP:8000/infer?mode=accuracy&local_test_dataset=inspecsafe_safety_level&local_test_sample_id=SAMPLE_ID"
+  "http://SERVER_IP:8000/infer?mode=accuracy&local_test_sample_id=SAMPLE_ID"
 ```
 
 Hints are stored under `server_query` in JSONL. The record's `association` is

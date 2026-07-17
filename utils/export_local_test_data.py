@@ -350,7 +350,6 @@ def _verify_export(
 
 
 def parse_args() -> argparse.Namespace:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     parser = argparse.ArgumentParser(
         description=(
             "Copy selected InspecSafe safety-level and/or LabSafety-Gen samples "
@@ -360,7 +359,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT / "data" / f"local_test_export_{timestamp}",
+        default=PROJECT_ROOT / "data" / "local_test_batch",
         help="New directory to create. Existing directories are never overwritten.",
     )
     parser.add_argument(

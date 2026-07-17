@@ -16,6 +16,8 @@ import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+os.environ["IMAGE_RAG_LOCAL_TEST_TOKEN"] = 'mde450'
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,6 +26,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from PIL import Image, ImageOps, ImageTk  # noqa: E402
 
 from utils.local_test_data import (  # noqa: E402
+    INSPECSAFE_SAFETY_LEVEL_DATASET,
+    LABSAFETY_GEN_DATASET,
     DisplaySample,
     SUPPORTED_LOCAL_TEST_DATASETS,
     default_annotations_path,
@@ -34,6 +38,16 @@ from utils.local_test_data import (  # noqa: E402
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def infer_dataset_from_annotations(annotations: Path | None) -> str:
+    """Infer the portable-batch dataset while preserving the old default."""
+    if annotations is None:
+        return INSPECSAFE_SAFETY_LEVEL_DATASET
+    normalized = annotations.as_posix().lower()
+    if LABSAFETY_GEN_DATASET in normalized or annotations.suffix.lower() == ".jsonl":
+        return LABSAFETY_GEN_DATASET
+    return INSPECSAFE_SAFETY_LEVEL_DATASET
 
 
 def websocket_uri(
@@ -470,7 +484,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         choices=sorted(SUPPORTED_LOCAL_TEST_DATASETS),
-        default="inspecsafe_safety_level",
+        default=None,
+        help="Optional override; normally inferred from --annotations.",
     )
     parser.add_argument(
         "--annotations",
@@ -512,7 +527,9 @@ def main() -> None:
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be at least 1.")
 
-    dataset = normalize_dataset(args.dataset)
+    dataset = normalize_dataset(
+        args.dataset or infer_dataset_from_annotations(args.annotations)
+    )
     annotations = args.annotations or default_annotations_path(dataset, PROJECT_ROOT)
     samples, missing = load_display_samples(
         dataset=dataset,

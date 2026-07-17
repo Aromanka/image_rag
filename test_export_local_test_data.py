@@ -6,10 +6,16 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
-from utils.export_local_test_data import export_subsets, select_samples
+from utils.export_local_test_data import (
+    PROJECT_ROOT,
+    export_subsets,
+    parse_args,
+    select_samples,
+)
 from utils.local_test_data import (
     INSPECSAFE_SAFETY_LEVEL_DATASET,
     LABSAFETY_GEN_DATASET,
@@ -19,6 +25,12 @@ from utils.local_test_data import (
 
 
 class ExportLocalTestDataTests(unittest.TestCase):
+    def test_cli_defaults_to_combined_local_test_batch(self) -> None:
+        with patch("sys.argv", ["export_local_test_data.py"]):
+            args = parse_args()
+        self.assertEqual(args.output_dir, PROJECT_ROOT / "data" / "local_test_batch")
+        self.assertIsNone(args.dataset)
+
     def _image(self, path: Path, color: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (12, 10), color).save(path)

@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 import image_server
 from utils.local_test_channel import LocalTestHub
 from utils.local_test_data import load_display_samples
-from utils.local_test_display import JsonlWriter, read_recorded_event_ids, websocket_uri
+from utils.local_test_display import (
+    JsonlWriter,
+    infer_dataset_from_annotations,
+    read_recorded_event_ids,
+    websocket_uri,
+)
 
 
 class FakeWebSocket:
@@ -206,6 +211,20 @@ class LocalTestDatasetTests(unittest.TestCase):
 
 
 class LocalTestProtocolTests(unittest.TestCase):
+    def test_dataset_is_inferred_from_portable_batch_annotations(self) -> None:
+        self.assertEqual(
+            infer_dataset_from_annotations(
+                Path("data/local_test_batch/inspecsafe_safety_level/annotations.json")
+            ),
+            "inspecsafe_safety_level",
+        )
+        self.assertEqual(
+            infer_dataset_from_annotations(
+                Path("data/local_test_batch/labsafety_gen/annotations.jsonl")
+            ),
+            "labsafety_gen",
+        )
+
     def test_completion_event_contains_query_identity_and_full_result(self) -> None:
         result = {"status": "success", "safe": "safe", "response": "safe"}
         event = image_server._build_local_test_event(
