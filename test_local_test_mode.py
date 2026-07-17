@@ -18,6 +18,7 @@ from utils.local_test_data import load_display_samples
 from utils.local_test_display import (
     JsonlWriter,
     infer_dataset_from_annotations,
+    parse_args as local_test_display_parse_args,
     read_recorded_event_ids,
     websocket_uri,
 )
@@ -207,6 +208,14 @@ class LocalTestDatasetTests(unittest.TestCase):
 
 
 class LocalTestProtocolTests(unittest.TestCase):
+    def test_display_cli_defaults_to_local_ssh_forward_port(self) -> None:
+        with patch("sys.argv", ["local_test_display.py"]):
+            args = local_test_display_parse_args()
+        self.assertEqual(
+            args.server,
+            "ws://127.0.0.1:18000/local-test/ws",
+        )
+
     def test_dataset_is_inferred_from_portable_batch_annotations(self) -> None:
         self.assertEqual(
             infer_dataset_from_annotations(
@@ -248,6 +257,11 @@ class LocalTestProtocolTests(unittest.TestCase):
     def test_jsonl_writer_flushes_complete_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "results" / "trials.jsonl"
+            output.parent.mkdir(parents=True)
+            output.write_text(
+                json.dumps({"event_id": "stale-event"}) + "\n",
+                encoding="utf-8",
+            )
             writer = JsonlWriter(output)
             writer.start()
             writer.submit(

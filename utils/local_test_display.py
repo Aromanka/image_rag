@@ -97,8 +97,9 @@ class JsonlWriter:
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Fail before the experiment starts if the target cannot be opened.
-        with self.path.open("a", encoding="utf-8"):
+        # Every display run owns a fresh result file. Truncate once here, then
+        # the writer thread appends and flushes one complete JSON object per line.
+        with self.path.open("w", encoding="utf-8"):
             pass
         self.thread.start()
 
@@ -232,7 +233,9 @@ class LocalTestDisplay:
         self.current_displayed_at = ""
         self.current_display_started = 0.0
         self.prepared_next: tuple[int, Image.Image] | None = None
-        self.seen_event_ids = read_recorded_event_ids(output_path)
+        # De-duplicate WebSocket replays within this run only. Results from an
+        # earlier run are intentionally discarded when the writer starts.
+        self.seen_event_ids: set[str] = set()
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.statuses: queue.Queue[str] = queue.Queue()
         self.writer = JsonlWriter(output_path, fsync=fsync)
@@ -462,7 +465,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--server",
-        default="ws://127.0.0.1:8000/local-test/ws",
+        default="ws://127.0.0.1:18000/local-test/ws",
         help="image_server local-test WebSocket URL.",
     )
     parser.add_argument(

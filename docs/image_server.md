@@ -210,7 +210,7 @@ python utils/local_test_display.py \
   --image-root data/local_test_batch/labsafety_gen
 
 python utils/local_test_display.py \
-  --server "ws://127.0.0.1:8000/local-test/ws" \
+  --server "ws://127.0.0.1:18000/local-test/ws" \
   --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
   --image-root data/local_test_batch/labsafety_gen
 ```
@@ -238,6 +238,12 @@ python utils/local_test_display.py \
 The viewer is fullscreen by default. Press `Esc` to exit or `F11` to toggle
 fullscreen. The next image is decoded and resized while the current image is
 displayed. JSONL writes happen on a separate thread after the screen changes.
+At startup, the selected `--output` file is opened once with `w` and therefore
+cleared if it already exists. During the run, each completed trial is appended
+as one JSONL line and flushed immediately. A process interruption can therefore
+leave at most the currently-writing final line incomplete; previous completed
+lines from the same run remain available. Use `--fsync` when each flushed line
+must also be forced to physical storage immediately.
 Useful client options include:
 
 ```text
@@ -255,14 +261,48 @@ makes the client fail on the first missing file. `--fsync` requests a disk sync
 for every result record, trading some disk activity for stronger durability.
 
 If SSH is the only route to the server, open a local port forward first and use
-the default `ws://127.0.0.1:8000/local-test/ws` URL:
+the default `ws://127.0.0.1:18000/local-test/ws` URL:
 
 ```bash
-ssh -N -L 8000:127.0.0.1:8000 USER@SERVER
+ssh -N -L 18000:127.0.0.1:8000 USER@SERVER
 ```
 
 The WebSocket endpoint has no application-level authentication. Do not expose
 port 8000 directly to an untrusted network; use the SSH tunnel described above.
+
+### Evaluate local test accuracy
+
+Use `utils/evaluate_local_test_results.py` after the display client has written
+one or more trials to JSONL:
+
+```bash
+python utils/evaluate_local_test_results.py \
+  save/local_test_labsafety_gen_20260717_125310.jsonl
+```
+
+Optionally save the machine-readable report:
+
+```bash
+python utils/evaluate_local_test_results.py \
+  save/local_test_labsafety_gen_20260717_125310.jsonl \
+  --output-json save/local_test_metrics.json
+```
+
+The evaluator treats `unsafe` as the positive binary class. LabSafety-Gen maps
+`hazardous` to `unsafe` and `non-hazardous` to `safe`. InspecSafe maps Levels
+I-III to `unsafe` and Level IV to `safe`; when structured level predictions are
+available, it also reports exact Level I-IV accuracy. The report includes:
+
+- binary accuracy and end-to-end accuracy;
+- coverage and output parse failures;
+- unsafe precision, recall, and F1;
+- TP/FP/TN/FN confusion counts;
+- metrics grouped by dataset and inference mode;
+- association mismatches, malformed JSONL lines, and duplicate events.
+
+`Binary accuracy` uses only successfully parsed predictions.
+`End-to-end accuracy` counts prediction parse failures as incorrect, so it is
+the more conservative experiment-level number.
 
 ### Optional trial association hints
 
