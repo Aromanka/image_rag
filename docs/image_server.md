@@ -157,9 +157,11 @@ on some Linux distributions it is a separate OS package).
 `utils/export_local_test_data.py` copies selected images and rewrites their
 annotations into a self-contained directory that can be transferred to the
 display computer. The default output is always `data/local_test_batch` (written
-as `data\local_test_batch` on Windows), and both supported datasets are exported
-together. There is no need to specify `--output-dir` or `--dataset`. For example,
-this exports 20 reproducibly shuffled test samples from each dataset:
+as `data\local_test_batch` on Windows). A dataset is enabled only when its image
+root is supplied: omit `--inspecsafe-image-root` to skip InspecSafe, or omit
+`--labsafety-image-root` to skip LabSafety-Gen. There is no need to specify
+`--output-dir` or `--dataset`. For example, this exports 20 reproducibly shuffled
+test samples from each dataset:
 
 ```bash
 python utils/export_local_test_data.py \
@@ -176,6 +178,8 @@ in a defined order by repeating the dataset-specific ID options:
 
 ```bash
 python utils/export_local_test_data.py \
+  --inspecsafe-image-root /root/autodl-tmp/data/inspecsafe/DATA_PATH \
+  --labsafety-image-root data/lab_safety_gen \
   --inspecsafe-id 'test__oil_chemical-Level01-example__frame-001' \
   --inspecsafe-id 'test__oil_chemical-Level04-example__frame-002' \
   --labsafety-id 'ls_bench_0021__02'
@@ -277,7 +281,7 @@ one or more trials to JSONL:
 
 ```bash
 python utils/evaluate_local_test_results.py \
-  save/local_test_labsafety_gen_20260717_125310.jsonl
+  save/local_test_labsafety_gen_20260717_130735.jsonl
 ```
 
 Optionally save the machine-readable report:

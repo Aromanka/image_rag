@@ -20,7 +20,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import INSPECSAFE_DATA_ROOT  # noqa: E402
 from utils.local_test_data import (  # noqa: E402
     INSPECSAFE_SAFETY_LEVEL_DATASET,
     LABSAFETY_GEN_DATASET,
@@ -366,7 +365,10 @@ def parse_args() -> argparse.Namespace:
         "--dataset",
         action="append",
         choices=DATASET_CHOICES,
-        help="Dataset to export; repeat as needed. Defaults to both datasets.",
+        help=(
+            "Optional additional dataset filter; repeat as needed. A dataset is "
+            "exported only when its corresponding --*-image-root is provided."
+        ),
     )
     parser.add_argument("--split", choices=["train", "test", "all"], default="test")
     parser.add_argument("--offset", type=int, default=0)
@@ -406,8 +408,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--inspecsafe-image-root",
         type=Path,
-        default=Path(INSPECSAFE_DATA_ROOT),
-        help="Original InspecSafe DATA_PATH or flat pipeline image directory.",
+        default=None,
+        help=(
+            "Original InspecSafe DATA_PATH or flat pipeline image directory. "
+            "Omit this option to skip InspecSafe."
+        ),
     )
     parser.add_argument(
         "--labsafety-annotations",
@@ -417,8 +422,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--labsafety-image-root",
         type=Path,
-        default=PROJECT_ROOT / "data" / "lab_safety_gen",
-        help="LabSafety-Gen root containing images/.",
+        default=None,
+        help=(
+            "LabSafety-Gen root containing images/. Omit this option to skip "
+            "LabSafety-Gen."
+        ),
     )
     return parser.parse_args()
 
@@ -429,7 +437,23 @@ def main() -> None:
         raise SystemExit("--offset cannot be negative.")
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be at least 1.")
-    datasets = list(dict.fromkeys(args.dataset or DATASET_CHOICES))
+    active_datasets = [
+        dataset
+        for dataset, image_root in (
+            (INSPECSAFE_SAFETY_LEVEL_DATASET, args.inspecsafe_image_root),
+            (LABSAFETY_GEN_DATASET, args.labsafety_image_root),
+        )
+        if image_root is not None
+    ]
+    requested_datasets = list(dict.fromkeys(args.dataset or active_datasets))
+    datasets = [
+        dataset for dataset in requested_datasets if dataset in active_datasets
+    ]
+    if not datasets:
+        raise SystemExit(
+            "No dataset is active. Provide --inspecsafe-image-root and/or "
+            "--labsafety-image-root."
+        )
     if args.inspecsafe_id and INSPECSAFE_SAFETY_LEVEL_DATASET not in datasets:
         raise SystemExit("--inspecsafe-id requires exporting inspecsafe_safety_level.")
     if args.labsafety_id and LABSAFETY_GEN_DATASET not in datasets:
