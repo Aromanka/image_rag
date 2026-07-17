@@ -203,21 +203,22 @@ data/local_test_batch/
 ```
 
 `manifest.json` records selection settings, original paths, copied paths, file
-sizes, and SHA-256 checksums. The exporter reloads both generated annotation
-files before finishing, ensuring they are compatible with the display client.
-After copying `data/local_test_batch` to the local computer, use the relevant
-batch subdirectory as `--image-root`, for example:
+sizes, and SHA-256 checksums. The exporter reloads every generated annotation
+file before finishing, ensuring it is compatible with the display client.
+After copying `data/local_test_batch` to the local computer, the display client
+automatically discovers whichever supported dataset directories are present.
+It is valid for the batch to contain only InspecSafe or only LabSafety-Gen; a
+missing dataset is skipped. When both are present, their samples are loaded
+together. The normal command therefore needs no dataset paths:
 
 ```powershell
 python utils/local_test_display.py \
-  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
-  --image-root data/local_test_batch/labsafety_gen
-
-python utils/local_test_display.py \
-  --server "ws://127.0.0.1:18000/local-test/ws" \
-  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
-  --image-root data/local_test_batch/labsafety_gen
+  --server "ws://127.0.0.1:18000/local-test/ws"
 ```
+
+Use `--dataset labsafety_gen` or `--dataset inspecsafe_safety_level` to select
+one present dataset. `--annotations` and `--image-root` remain available for an
+explicit single-dataset path outside the default batch.
 
 For InspecSafe:
 

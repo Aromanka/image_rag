@@ -17,6 +17,7 @@ from utils.local_test_channel import LocalTestHub
 from utils.local_test_data import load_display_samples
 from utils.local_test_display import (
     JsonlWriter,
+    discover_portable_datasets,
     infer_dataset_from_annotations,
     parse_args as local_test_display_parse_args,
     read_recorded_event_ids,
@@ -229,6 +230,40 @@ class LocalTestProtocolTests(unittest.TestCase):
             ),
             "labsafety_gen",
         )
+
+    def test_portable_dataset_discovery_ignores_missing_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            batch_root = Path(temp_dir)
+            labsafety_root = batch_root / "labsafety_gen"
+            labsafety_root.mkdir()
+            annotations = labsafety_root / "annotations.jsonl"
+            annotations.write_text("", encoding="utf-8")
+
+            discovered = discover_portable_datasets(batch_root)
+
+            self.assertEqual(
+                discovered,
+                [("labsafety_gen", annotations, labsafety_root)],
+            )
+
+    def test_portable_dataset_discovery_can_filter_present_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            batch_root = Path(temp_dir)
+            for dataset, filename in (
+                ("inspecsafe_safety_level", "annotations.json"),
+                ("labsafety_gen", "annotations.jsonl"),
+            ):
+                dataset_root = batch_root / dataset
+                dataset_root.mkdir()
+                (dataset_root / filename).write_text("", encoding="utf-8")
+
+            discovered = discover_portable_datasets(
+                batch_root,
+                requested_dataset="labsafety_gen",
+            )
+
+            self.assertEqual(len(discovered), 1)
+            self.assertEqual(discovered[0][0], "labsafety_gen")
 
     def test_completion_event_contains_query_identity_and_full_result(self) -> None:
         result = {"status": "success", "safe": "safe", "response": "safe"}

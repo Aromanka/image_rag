@@ -27,10 +27,16 @@ from utils.local_test_data import (  # noqa: E402
     LABSAFETY_GEN_DATASET,
     DisplaySample,
     SUPPORTED_LOCAL_TEST_DATASETS,
-    default_annotations_path,
     load_display_samples,
     normalize_dataset,
 )
+
+
+LOCAL_TEST_BATCH_ROOT = PROJECT_ROOT / "data" / "local_test_batch"
+PORTABLE_ANNOTATION_FILENAMES = {
+    INSPECSAFE_SAFETY_LEVEL_DATASET: "annotations.json",
+    LABSAFETY_GEN_DATASET: "annotations.jsonl",
+}
 
 
 def utc_now_iso() -> str:
@@ -45,6 +51,26 @@ def infer_dataset_from_annotations(annotations: Path | None) -> str:
     if LABSAFETY_GEN_DATASET in normalized or annotations.suffix.lower() == ".jsonl":
         return LABSAFETY_GEN_DATASET
     return INSPECSAFE_SAFETY_LEVEL_DATASET
+
+
+def discover_portable_datasets(
+    batch_root: Path,
+    *,
+    requested_dataset: str | None = None,
+) -> list[tuple[str, Path, Path]]:
+    """Return datasets actually present in a portable local-test batch."""
+    datasets = (
+        [normalize_dataset(requested_dataset)]
+        if requested_dataset is not None
+        else [INSPECSAFE_SAFETY_LEVEL_DATASET, LABSAFETY_GEN_DATASET]
+    )
+    discovered: list[tuple[str, Path, Path]] = []
+    for dataset in datasets:
+        image_root = batch_root / dataset
+        annotations = image_root / PORTABLE_ANNOTATION_FILENAMES[dataset]
+        if annotations.is_file():
+            discovered.append((dataset, annotations, image_root))
+    return discovered
 
 
 def websocket_uri(
@@ -472,13 +498,19 @@ def parse_args() -> argparse.Namespace:
         "--dataset",
         choices=sorted(SUPPORTED_LOCAL_TEST_DATASETS),
         default=None,
-        help="Optional override; normally inferred from --annotations.",
+        help=(
+            "Optional filter or --annotations override. By default, all datasets "
+            "present under data/local_test_batch are loaded."
+        ),
     )
     parser.add_argument(
         "--annotations",
         type=Path,
         default=None,
-        help="Dataset JSON/JSONL. A repository default is selected by dataset.",
+        help=(
+            "Explicit single-dataset JSON/JSONL. When omitted, available datasets "
+            "are discovered under data/local_test_batch."
+        ),
     )
     parser.add_argument(
         "--image-root",
@@ -514,17 +546,39 @@ def main() -> None:
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be at least 1.")
 
-    dataset = normalize_dataset(
-        args.dataset or infer_dataset_from_annotations(args.annotations)
-    )
-    annotations = args.annotations or default_annotations_path(dataset, PROJECT_ROOT)
-    samples, missing = load_display_samples(
-        dataset=dataset,
-        annotations_path=annotations,
-        image_root=args.image_root,
-        split=args.split,
-        skip_missing=not args.strict_images,
-    )
+    if args.annotations is not None:
+        dataset = normalize_dataset(
+            args.dataset or infer_dataset_from_annotations(args.annotations)
+        )
+        dataset_sources = [(dataset, args.annotations, args.image_root)]
+    else:
+        dataset_sources = discover_portable_datasets(
+            LOCAL_TEST_BATCH_ROOT,
+            requested_dataset=args.dataset,
+        )
+        if not dataset_sources:
+            requested = f" for {args.dataset}" if args.dataset else ""
+            raise SystemExit(
+                f"No local-test dataset{requested} was found under "
+                f"{LOCAL_TEST_BATCH_ROOT}. Export at least one dataset or provide "
+                "--annotations explicitly."
+            )
+
+    samples: list[DisplaySample] = []
+    missing = 0
+    loaded_datasets: list[str] = []
+    for dataset, annotations, discovered_image_root in dataset_sources:
+        image_root = args.image_root or discovered_image_root
+        dataset_samples, dataset_missing = load_display_samples(
+            dataset=dataset,
+            annotations_path=annotations,
+            image_root=image_root,
+            split=args.split,
+            skip_missing=not args.strict_images,
+        )
+        samples.extend(dataset_samples)
+        missing += dataset_missing
+        loaded_datasets.append(dataset)
     if missing:
         print(f"Skipped {missing} samples whose local image was not found.")
     if args.shuffle:
@@ -541,7 +595,12 @@ def main() -> None:
     output = args.output
     if output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = PROJECT_ROOT / "save" / f"local_test_{dataset}_{timestamp}.jsonl"
+        dataset_label = (
+            loaded_datasets[0] if len(loaded_datasets) == 1 else "combined"
+        )
+        output = (
+            PROJECT_ROOT / "save" / f"local_test_{dataset_label}_{timestamp}.jsonl"
+        )
 
     display = LocalTestDisplay(
         samples=samples,
