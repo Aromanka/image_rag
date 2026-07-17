@@ -59,12 +59,8 @@ class LocalTestChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.messages[0]["replayed_count"], 1)
         self.assertEqual(second.messages[1]["event_id"], "event-1")
 
-    async def test_token_and_history_limit(self) -> None:
-        hub = LocalTestHub(enabled=True, token="secret", history_size=2)
-        self.assertFalse(hub.is_authorized(None))
-        self.assertFalse(hub.is_authorized("wrong"))
-        self.assertTrue(hub.is_authorized("secret"))
-
+    async def test_history_limit(self) -> None:
+        hub = LocalTestHub(enabled=True, history_size=2)
         for index in range(3):
             await hub.publish(
                 {"type": "inference.completed", "event_id": f"event-{index}"}
@@ -239,17 +235,15 @@ class LocalTestProtocolTests(unittest.TestCase):
         self.assertEqual(event["query"]["sample_id"], "lab-1")
         self.assertIs(event["result"], result)
 
-    def test_client_uri_preserves_query_and_adds_token(self) -> None:
+    def test_client_uri_preserves_query_and_resume_state(self) -> None:
         uri = websocket_uri(
             "wss://example.test/ws?client=display",
-            "secret value",
             after_sequence=7,
             server_instance_id="server-1",
         )
         self.assertIn("client=display", uri)
         self.assertIn("after_sequence=7", uri)
         self.assertIn("server_instance_id=server-1", uri)
-        self.assertIn("token=secret+value", uri)
 
     def test_jsonl_writer_flushes_complete_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -273,7 +267,6 @@ class LocalTestProtocolTests(unittest.TestCase):
         app = image_server.create_app(
             preload=False,
             local_test_mode=True,
-            local_test_token="secret",
             local_test_dataset="labsafety_gen",
         )
         image_buffer = BytesIO()
@@ -282,7 +275,7 @@ class LocalTestProtocolTests(unittest.TestCase):
         client = TestClient(app)
         try:
             with client.websocket_connect(
-                "/local-test/ws?token=secret&after_sequence=-1"
+                "/local-test/ws?after_sequence=-1"
             ) as websocket:
                 ready = websocket.receive_json()
                 self.assertEqual(ready["type"], "local_test.ready")

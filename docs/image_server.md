@@ -99,7 +99,6 @@ Available startup options include:
 --lora-weights PATH
 --no-preload
 --local-test
---local-test-token TOKEN
 --local-test-history-size N
 ```
 
@@ -132,23 +131,20 @@ or duplicate a trial. The history is reset when `image_server.py` restarts.
 
 ### Start the server in local test mode
 
-Using a shared token is recommended whenever the WebSocket port is reachable by
-another machine. The environment variable avoids putting the token directly in
-shell history:
+WebSocket token authentication is intentionally disabled for this local test
+workflow. Restrict access with an SSH tunnel or host firewall instead:
 
 ```bash
-export IMAGE_RAG_LOCAL_TEST_TOKEN='mde450'
-
 python image_server.py \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 8000 \
   --local-test
 ```
 
 The server does not select a local display dataset. The portable batch on the
 display computer owns all image and ground-truth data. `GET /health` reports
-whether local test mode is enabled, the number of display connections, token
-requirement, and replay history capacity without exposing the token.
+whether local test mode is enabled, the number of display connections, and the
+replay history capacity.
 
 ### Start the local fullscreen display
 
@@ -209,8 +205,13 @@ After copying `data/local_test_batch` to the local computer, use the relevant
 batch subdirectory as `--image-root`, for example:
 
 ```powershell
-python utils/local_test_display.py `
-  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl `
+python utils/local_test_display.py \
+  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
+  --image-root data/local_test_batch/labsafety_gen
+
+python utils/local_test_display.py \
+  --server "ws://127.0.0.1:8000/local-test/ws" \
+  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
   --image-root data/local_test_batch/labsafety_gen
 ```
 
@@ -227,10 +228,10 @@ python utils/local_test_display.py \
 For LabSafety-Gen:
 
 ```powershell
-python utils/local_test_display.py `
-  --server "ws://SERVER_IP:8000/local-test/ws" `
-  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl `
-  --image-root data/local_test_batch/labsafety_gen `
+python utils/local_test_display.py \
+  --server "ws://SERVER_IP:8000/local-test/ws" \
+  --annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
+  --image-root data/local_test_batch/labsafety_gen \
   --output save/local_test_labsafety.jsonl
 ```
 
@@ -260,8 +261,8 @@ the default `ws://127.0.0.1:8000/local-test/ws` URL:
 ssh -N -L 8000:127.0.0.1:8000 USER@SERVER
 ```
 
-For a directly exposed connection, prefer `wss://` behind TLS. A token sent over
-plain `ws://` is not encrypted.
+The WebSocket endpoint has no application-level authentication. Do not expose
+port 8000 directly to an untrusted network; use the SSH tunnel described above.
 
 ### Optional trial association hints
 

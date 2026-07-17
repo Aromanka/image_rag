@@ -11,7 +11,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
-import os
 from pathlib import Path
 import tempfile
 import time
@@ -268,7 +267,6 @@ def create_app(
     preload: bool = True,
     lora_weights: str | Path | None = None,
     local_test_mode: bool = False,
-    local_test_token: str | None = None,
     local_test_dataset: str | None = None,
     local_test_history_size: int = 1024,
 ) -> FastAPI:
@@ -281,7 +279,6 @@ def create_app(
     )
     local_test_hub = LocalTestHub(
         enabled=local_test_mode,
-        token=local_test_token,
         history_size=local_test_history_size,
     )
 
@@ -312,10 +309,9 @@ def create_app(
         else:
             print("LoRA weights disabled.", flush=True)
         if local_test_hub.enabled:
-            auth_status = "token required" if local_test_hub.auth_required else "no token"
             print(
                 "Local test mode enabled: ws://<server>/local-test/ws "
-                f"({auth_status}, dataset={normalized_local_test_dataset or 'client-selected'})",
+                f"(dataset={normalized_local_test_dataset or 'client-selected'})",
                 flush=True,
             )
         else:
@@ -343,7 +339,6 @@ def create_app(
                 "websocket_path": "/local-test/ws",
                 "connected_clients": local_test_hub.connection_count,
                 "default_dataset": normalized_local_test_dataset,
-                "auth_required": local_test_hub.auth_required,
                 "history_size": local_test_hub.history_size,
             },
         }
@@ -351,16 +346,11 @@ def create_app(
     @app.websocket("/local-test/ws")
     async def local_test_websocket(
         websocket: WebSocket,
-        token: str | None = Query(default=None),
         after_sequence: int = Query(default=-1, ge=-1),
         server_instance_id: str | None = Query(default=None),
     ) -> None:
         if not local_test_hub.enabled:
             await websocket.close(code=1008, reason="Local test mode is disabled.")
-            return
-        if not local_test_hub.is_authorized(token):
-            await websocket.accept()
-            await websocket.close(code=1008, reason="Invalid local test token.")
             return
 
         try:
@@ -609,11 +599,6 @@ def parse_args() -> argparse.Namespace:
         help="Enable the /local-test/ws inference-completion channel.",
     )
     parser.add_argument(
-        "--local-test-token",
-        default=os.environ.get("IMAGE_RAG_LOCAL_TEST_TOKEN"),
-        help="Optional WebSocket shared token (or IMAGE_RAG_LOCAL_TEST_TOKEN).",
-    )
-    parser.add_argument(
         "--local-test-dataset",
         choices=sorted(SUPPORTED_LOCAL_TEST_DATASETS),
         default=None,
@@ -656,7 +641,6 @@ if __name__ == "__main__":
             preload=not args.no_preload,
             lora_weights=args.lora_weights,
             local_test_mode=args.local_test,
-            local_test_token=args.local_test_token,
             local_test_dataset=args.local_test_dataset,
             local_test_history_size=args.local_test_history_size,
         ),

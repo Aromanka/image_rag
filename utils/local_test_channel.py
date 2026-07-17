@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
-import secrets
 from typing import Any
 from uuid import uuid4
 
@@ -25,7 +24,6 @@ class LocalTestHub:
         self,
         *,
         enabled: bool,
-        token: str | None = None,
         history_size: int = 1024,
         send_timeout_seconds: float = 2.0,
     ) -> None:
@@ -35,7 +33,6 @@ class LocalTestHub:
             raise ValueError("send_timeout_seconds must be positive.")
 
         self.enabled = enabled
-        self._token = token or None
         self.history_size = history_size
         self.send_timeout_seconds = send_timeout_seconds
         self.instance_id = str(uuid4())
@@ -45,20 +42,8 @@ class LocalTestHub:
         self._lock = asyncio.Lock()
 
     @property
-    def auth_required(self) -> bool:
-        return self._token is not None
-
-    @property
     def connection_count(self) -> int:
         return len(self._clients)
-
-    def is_authorized(self, supplied_token: str | None) -> bool:
-        if self._token is None:
-            return True
-        return supplied_token is not None and secrets.compare_digest(
-            supplied_token,
-            self._token,
-        )
 
     async def connect(
         self,

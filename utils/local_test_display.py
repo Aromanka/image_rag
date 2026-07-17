@@ -16,9 +16,6 @@ import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-os.environ["IMAGE_RAG_LOCAL_TEST_TOKEN"] = 'mde450'
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -52,7 +49,6 @@ def infer_dataset_from_annotations(annotations: Path | None) -> str:
 
 def websocket_uri(
     base_uri: str,
-    token: str | None,
     *,
     after_sequence: int = -1,
     server_instance_id: str | None = None,
@@ -65,8 +61,6 @@ def websocket_uri(
     query["after_sequence"] = str(after_sequence)
     if server_instance_id:
         query["server_instance_id"] = server_instance_id
-    if token:
-        query["token"] = token
     return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
@@ -137,12 +131,10 @@ class EventReceiver:
         self,
         *,
         server_uri: str,
-        token: str | None,
         messages: queue.Queue[dict[str, Any]],
         statuses: queue.Queue[str],
     ) -> None:
         self.server_uri = server_uri
-        self.token = token
         self.messages = messages
         self.statuses = statuses
         self.stop_event = threading.Event()
@@ -174,7 +166,6 @@ class EventReceiver:
             try:
                 uri = websocket_uri(
                     self.server_uri,
-                    self.token,
                     after_sequence=self.last_sequence,
                     server_instance_id=self.server_instance_id,
                 )
@@ -228,7 +219,6 @@ class LocalTestDisplay:
         samples: list[DisplaySample],
         output_path: Path,
         server_uri: str,
-        token: str | None,
         fullscreen: bool,
         loop: bool,
         fsync: bool,
@@ -248,7 +238,6 @@ class LocalTestDisplay:
         self.writer = JsonlWriter(output_path, fsync=fsync)
         self.receiver = EventReceiver(
             server_uri=server_uri,
-            token=token,
             messages=self.messages,
             statuses=self.statuses,
         )
@@ -477,11 +466,6 @@ def parse_args() -> argparse.Namespace:
         help="image_server local-test WebSocket URL.",
     )
     parser.add_argument(
-        "--token",
-        default=os.environ.get("IMAGE_RAG_LOCAL_TEST_TOKEN"),
-        help="Optional shared token (or set IMAGE_RAG_LOCAL_TEST_TOKEN).",
-    )
-    parser.add_argument(
         "--dataset",
         choices=sorted(SUPPORTED_LOCAL_TEST_DATASETS),
         default=None,
@@ -560,7 +544,6 @@ def main() -> None:
         samples=samples,
         output_path=output,
         server_uri=args.server,
-        token=args.token,
         fullscreen=not args.windowed,
         loop=args.loop,
         fsync=args.fsync,
