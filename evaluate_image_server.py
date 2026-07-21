@@ -44,7 +44,7 @@ ALL_MODES = "all"
 
 DEFAULT_DATASET_PATHS = {
     INSPECSAFE: PROJECT_ROOT / "data" / "inspecsafe" / "test.csv",
-    CONSTRUCTIONSITE10K: PROJECT_ROOT / "constructionsite_10k" / "test.json",
+    CONSTRUCTIONSITE10K: PROJECT_ROOT / "data" / "constructionsite" / "test.json",
     LABSAFETY_GEN: PROJECT_ROOT / "data" / "lab_safety_gen" / "annotations.jsonl",
 }
 
