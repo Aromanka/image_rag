@@ -21,6 +21,22 @@ def _record(truth: str, predicted: str, *, score: float = 0.5) -> dict:
 
 
 class EvaluateImageServerTests(unittest.TestCase):
+    def test_constructionsite_default_image_prefix(self) -> None:
+        image_path = evaluator.constructionsite_image_path(
+            {"image": "images\\0000001.jpg"},
+            Path("constructionsite_10k/test.json"),
+            None,
+        )
+
+        self.assertEqual(
+            image_path,
+            evaluator.PROJECT_ROOT
+            / "data"
+            / "constructionsite"
+            / "images"
+            / "0000001.jpg",
+        )
+
     def test_binary_metrics_use_unsafe_as_positive_label(self) -> None:
         records = [
             _record("unsafe", "unsafe", score=0.8),

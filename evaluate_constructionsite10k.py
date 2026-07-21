@@ -64,7 +64,7 @@ def _sample_image_path(
 
     if image_root is not None:
         return image_root / image_path.name
-    return dataset_json.parent / image_path
+    return PROJECT_ROOT / "data" / "constructionsite" / image_path
 
 
 def _retrieved_image_paths(result: dict[str, Any]) -> list[str]:
