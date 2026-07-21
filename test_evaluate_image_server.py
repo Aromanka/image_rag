@@ -104,6 +104,40 @@ class EvaluateImageServerTests(unittest.TestCase):
         self.assertEqual(records[0]["server_result"]["annotation"], "Normal scene.")
         self.assertTrue(records[0]["correct"])
 
+    def test_missing_file_error_prints_concrete_path(self) -> None:
+        sample = evaluator.EvaluationSample(
+            sample_id="missing-1",
+            image_path=Path("missing/query.jpg"),
+            ground_truth="unsafe",
+            reference_text="A hazard is visible.",
+        )
+        error = FileNotFoundError(
+            "Query image not found: /data/constructionsite/images/query.jpg"
+        )
+
+        with patch.object(
+            evaluator.image_server,
+            "_run_inference",
+            side_effect=error,
+        ):
+            with patch.object(evaluator.tqdm, "write") as terminal_write:
+                records = evaluator._evaluate_mode(
+                    samples=[sample],
+                    mode=evaluator.image_server.LATENCY_MODE,
+                    top_k=5,
+                    max_new_tokens=384,
+                    stage_one_max_new_tokens=8,
+                    stage_two_max_new_tokens=128,
+                    checkpoint_every=0,
+                    checkpoint=lambda _: None,
+                )
+
+        message = terminal_write.call_args.args[0]
+        self.assertIn("FileNotFoundError", message)
+        self.assertIn("/data/constructionsite/images/query.jpg", message)
+        self.assertIn(f"query_image={sample.image_path}", message)
+        self.assertEqual(records[0]["status"], "error")
+
     def test_inspecsafe_loader_maps_labels_and_reference_caption(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             csv_path = Path(temp_dir) / "test.csv"

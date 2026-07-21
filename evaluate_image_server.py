@@ -386,6 +386,11 @@ def _evaluate_mode(
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             elapsed = time.perf_counter() - started
+            if isinstance(exc, FileNotFoundError):
+                tqdm.write(
+                    f"[{mode}][{sample.sample_id}] FileNotFoundError: {exc} "
+                    f"| query_image={sample.image_path}"
+                )
             record = {
                 "id": sample.sample_id,
                 "image_path": str(sample.image_path),
