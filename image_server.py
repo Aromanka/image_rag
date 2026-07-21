@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -42,6 +43,7 @@ from config import (
     SAFETY_LEVEL_TASK,
     TOP_K,
     UNIFIED_SAFETY_DATASET,
+    VLM_LORA_WEIGHTS,
 )
 from response_forwarding import forward_text_response
 from utils.evaluate_utils import extract_inspecsafe_safety_level_json
@@ -98,6 +100,21 @@ IMAGE_SUFFIXES = {
 # One worker owns one model. Requests received while inference is active return
 # BUSY immediately instead of accumulating in GPU memory.
 VLM_LOCK_OPEN = True
+
+
+def _configure_server_lora(lora_weights: str | Path | None) -> str | Path | None:
+    """Select the shared server LoRA before any inference mode loads the VLM.
+
+    All modes use one VLM instance. Falling back to the environment/configured
+    adapter here explicitly enables the default LoRA for latency-first/two-stage
+    inference instead of relying on ``vlm_inference`` import-time configuration.
+    """
+    if lora_weights is None:
+        selected = os.environ.get("VLM_LORA_WEIGHTS") or VLM_LORA_WEIGHTS
+    else:
+        selected = lora_weights
+    configure_lora_weights(selected)
+    return selected
 
 
 def _utc_now_iso() -> str:
@@ -208,6 +225,7 @@ def _build_success_response_payload(
     response_payload: dict[str, object] = {
         "status": "success",
         "mode": mode,
+        "lora_weights": active_lora_weights(),
         **_parse_mode_response(mode, output),
         "response": output,
         "response_time_seconds": round(elapsed, 3),
@@ -270,8 +288,7 @@ def create_app(
     local_test_dataset: str | None = None,
     local_test_history_size: int = 1024,
 ) -> FastAPI:
-    if lora_weights is not None:
-        configure_lora_weights(lora_weights)
+    _configure_server_lora(lora_weights)
 
     max_upload_bytes = max_upload_mb * 1024 * 1024
     normalized_local_test_dataset = (

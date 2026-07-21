@@ -6,10 +6,42 @@ from pathlib import Path
 from unittest.mock import patch
 
 import image_server
-from config import INSPECSAFE_DATASET, SAFETY_JUDGEMENT_TASK, SAFETY_LEVEL_TASK
+from config import (
+    INSPECSAFE_DATASET,
+    SAFETY_JUDGEMENT_TASK,
+    SAFETY_LEVEL_TASK,
+    VLM_LORA_WEIGHTS,
+)
 
 
 class ImageServerModeTests(unittest.TestCase):
+    def test_server_defaults_to_configured_lora_for_latency_first(self) -> None:
+        with patch.dict(image_server.os.environ, {"VLM_LORA_WEIGHTS": ""}):
+            with patch.object(image_server, "configure_lora_weights") as configure:
+                selected = image_server._configure_server_lora(None)
+
+        self.assertEqual(selected, VLM_LORA_WEIGHTS)
+        configure.assert_called_once_with(VLM_LORA_WEIGHTS)
+
+    def test_server_preserves_environment_lora_default(self) -> None:
+        with patch.dict(
+            image_server.os.environ,
+            {"VLM_LORA_WEIGHTS": "environment-lora"},
+        ):
+            with patch.object(image_server, "configure_lora_weights") as configure:
+                selected = image_server._configure_server_lora(None)
+
+        self.assertEqual(selected, "environment-lora")
+        configure.assert_called_once_with("environment-lora")
+
+    def test_explicit_lora_override_is_preserved(self) -> None:
+        override = Path("custom-lora")
+        with patch.object(image_server, "configure_lora_weights") as configure:
+            selected = image_server._configure_server_lora(override)
+
+        self.assertEqual(selected, override)
+        configure.assert_called_once_with(override)
+
     def test_normalizes_four_modes_and_first_aliases(self) -> None:
         expected = {
             "accuracy": image_server.ACCURACY_MODE,
@@ -155,15 +187,21 @@ class ImageServerModeTests(unittest.TestCase):
         )
 
     def test_success_payload_contains_unified_semantic_fields(self) -> None:
-        payload = image_server._build_success_response_payload(
-            image_server.ACCURACY_MODE,
-            '{"scene_description":"Normal scene.","hazards":[]}',
-            {"retrieved_count_before_gate": 5, "retrieved_count": 2},
-            1.2345,
-        )
+        with patch.object(
+            image_server,
+            "active_lora_weights",
+            return_value="configured-lora",
+        ):
+            payload = image_server._build_success_response_payload(
+                image_server.ACCURACY_MODE,
+                '{"scene_description":"Normal scene.","hazards":[]}',
+                {"retrieved_count_before_gate": 5, "retrieved_count": 2},
+                1.2345,
+            )
 
         self.assertEqual(payload["safe"], "safe")
         self.assertEqual(payload["annotation"], "Normal scene.")
+        self.assertEqual(payload["lora_weights"], "configured-lora")
         self.assertEqual(payload["response_time_seconds"], 1.234)
         self.assertEqual(payload["retrieved_count_before_gate"], 5)
         self.assertEqual(payload["retrieved_count"], 2)
