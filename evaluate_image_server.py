@@ -1,10 +1,8 @@
 """Evaluate the direct backend used by :mod:`image_server`.
 
 This script deliberately bypasses HTTP, response forwarding, and the local-test
-display channel.  Inference is dispatched through ``image_server._run_inference``
-and parsed through ``image_server._build_success_response_payload`` so mode
-routing, prompts, RAG settings, token limits, and response semantics stay in one
-place.
+display channel. It preserves the server mode policies and generation settings,
+while routing each evaluation task to its corresponding RAG database.
 """
 
 from __future__ import annotations
@@ -23,7 +21,16 @@ from typing import Any, Iterable
 from tqdm import tqdm
 
 import image_server
-from config import PROJECT_ROOT, SBERT_MODEL_PATH
+from config import (
+    CONSTRUCTIONSITE10K_DATASET,
+    CONSTRUCTIONSITE10K_TASK,
+    INSPECSAFE_DATASET,
+    LAB_SAFETY_GEN_DATASET,
+    LAB_SAFETY_GEN_TASK,
+    PROJECT_ROOT,
+    SAFETY_LEVEL_TASK,
+    SBERT_MODEL_PATH,
+)
 from evaluate_constructionsite10k import (
     _assistant_text,
     _sample_image_path as constructionsite_image_path,
@@ -33,7 +40,7 @@ from evaluate_labsafety_gen import (
     _sample_image_path as labsafety_image_path,
     load_labsafety_gen_samples,
 )
-from utils.evaluate_utils import parse_constructionsite10k_output
+from utils.evaluate_utils import extract_hazard_label, parse_constructionsite10k_output
 
 
 INSPECSAFE = "inspecsafe"
@@ -46,6 +53,17 @@ DEFAULT_DATASET_PATHS = {
     INSPECSAFE: PROJECT_ROOT / "data" / "inspecsafe" / "test.csv",
     CONSTRUCTIONSITE10K: PROJECT_ROOT / "data" / "constructionsite" / "test.json",
     LABSAFETY_GEN: PROJECT_ROOT / "data" / "lab_safety_gen" / "annotations.jsonl",
+}
+
+RAG_TASK_BY_DATASET = {
+    INSPECSAFE: SAFETY_LEVEL_TASK,
+    CONSTRUCTIONSITE10K: CONSTRUCTIONSITE10K_TASK,
+    LABSAFETY_GEN: LAB_SAFETY_GEN_TASK,
+}
+RAG_DATABASE_BY_DATASET = {
+    INSPECSAFE: INSPECSAFE_DATASET,
+    CONSTRUCTIONSITE10K: CONSTRUCTIONSITE10K_DATASET,
+    LABSAFETY_GEN: LAB_SAFETY_GEN_DATASET,
 }
 
 
@@ -338,8 +356,99 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
         json.dump(report, file, indent=2, ensure_ascii=False, default=str)
 
 
+def _run_dataset_inference(
+    *,
+    dataset: str,
+    image_path: Path,
+    mode: str,
+    top_k: int,
+    max_new_tokens: int,
+    stage_one_max_new_tokens: int,
+    stage_two_max_new_tokens: int,
+) -> tuple[str, dict[str, Any]]:
+    """Run a server mode while selecting the RAG task/database by dataset."""
+    if mode == image_server.LATENCY_MODE or dataset == INSPECSAFE:
+        return image_server._run_inference(
+            image_path=image_path,
+            mode=mode,
+            top_k=top_k,
+            max_new_tokens=max_new_tokens,
+            stage_one_max_new_tokens=stage_one_max_new_tokens,
+            stage_two_max_new_tokens=stage_two_max_new_tokens,
+        )
+
+    task_type = RAG_TASK_BY_DATASET[dataset]
+    rag_dataset = RAG_DATABASE_BY_DATASET[dataset]
+    result = image_server.VLM_inference_with_RAG(
+        task_type,
+        image_path,
+        top_k=top_k,
+        gated_rag=image_server.ACCURACY_GATE,
+        rag_dataset=rag_dataset,
+        max_new_tokens=max_new_tokens,
+    )
+    return str(result["output"]), result
+
+
+def _parse_dataset_rag_response(dataset: str, output: str) -> dict[str, str]:
+    if dataset == INSPECSAFE:
+        return image_server._parse_accuracy_response(output)
+
+    if dataset == CONSTRUCTIONSITE10K:
+        parsed, parse_ok = parse_constructionsite10k_output(output)
+        if not parse_ok:
+            raise ValueError("Unable to parse ConstructionSite-10K RAG output.")
+        violations = parsed.get("violations", [])
+        return {
+            "safe": "unsafe" if violations else "safe",
+            "annotation": str(parsed.get("annotation", "")).strip(),
+        }
+
+    predicted = extract_hazard_label(output)
+    if predicted is None:
+        raise ValueError("Unable to parse LabSafety-Gen RAG output.")
+    return {
+        "safe": "unsafe" if predicted == "hazardous" else "safe",
+        "annotation": output.strip(),
+    }
+
+
+def _build_dataset_success_payload(
+    *,
+    dataset: str,
+    mode: str,
+    output: str,
+    result: dict[str, Any],
+    elapsed: float,
+) -> dict[str, Any]:
+    if mode == image_server.LATENCY_MODE:
+        return image_server._build_success_response_payload(
+            mode, output, result, elapsed
+        )
+
+    parsed = _parse_dataset_rag_response(dataset, output)
+    return {
+        "status": "success",
+        "mode": mode,
+        "lora_weights": image_server.active_lora_weights(),
+        **parsed,
+        "response": output,
+        "response_time_seconds": round(elapsed, 3),
+        "rag_task": RAG_TASK_BY_DATASET[dataset],
+        "rag_dataset": result.get(
+            "rag_dataset", RAG_DATABASE_BY_DATASET[dataset]
+        ),
+        "gated_rag": result.get("gated_rag", image_server.ACCURACY_GATE),
+        "retrieved_count_before_gate": result.get(
+            "retrieved_count_before_gate", 0
+        ),
+        "retrieved_count": result.get("retrieved_count", 0),
+    }
+
+
 def _evaluate_mode(
     *,
+    dataset: str,
     samples: list[EvaluationSample],
     mode: str,
     top_k: int,
@@ -354,7 +463,8 @@ def _evaluate_mode(
     for sample_index, sample in enumerate(progress, start=1):
         started = time.perf_counter()
         try:
-            output, raw_result = image_server._run_inference(
+            output, raw_result = _run_dataset_inference(
+                dataset=dataset,
                 image_path=sample.image_path,
                 mode=mode,
                 top_k=top_k,
@@ -363,8 +473,12 @@ def _evaluate_mode(
                 stage_two_max_new_tokens=stage_two_max_new_tokens,
             )
             elapsed = time.perf_counter() - started
-            server_result = image_server._build_success_response_payload(
-                mode, output, raw_result, elapsed
+            server_result = _build_dataset_success_payload(
+                dataset=dataset,
+                mode=mode,
+                output=output,
+                result=raw_result,
+                elapsed=elapsed,
             )
             predicted = str(server_result["safe"])
             record = {
@@ -459,6 +573,12 @@ def run_evaluation(args: argparse.Namespace) -> Path:
 
     if args.lora_weights is not None:
         image_server.configure_lora_weights(args.lora_weights)
+    print(
+        "Evaluation RAG routing: "
+        f"task={RAG_TASK_BY_DATASET[dataset]} "
+        f"database={RAG_DATABASE_BY_DATASET[dataset]}",
+        flush=True,
+    )
     if not args.no_preload:
         print("Preloading the same models used by image_server.py...", flush=True)
         image_server.preload_models()
@@ -474,7 +594,8 @@ def run_evaluation(args: argparse.Namespace) -> Path:
             "stage_one_max_new_tokens": args.stage_one_max_new_tokens,
             "stage_two_max_new_tokens": args.stage_two_max_new_tokens,
             "accuracy_gate": image_server.ACCURACY_GATE,
-            "rag_dataset": image_server.INSPECSAFE_DATASET,
+            "rag_task": RAG_TASK_BY_DATASET[dataset],
+            "rag_dataset": RAG_DATABASE_BY_DATASET[dataset],
             "lora_weights": image_server.active_lora_weights(),
             "sbert_model_path": None if args.skip_sbert else str(args.sbert_path),
             "sbert_reference": (
@@ -498,6 +619,7 @@ def run_evaluation(args: argparse.Namespace) -> Path:
             _write_report(output_path, report)
 
         records = _evaluate_mode(
+            dataset=dataset,
             samples=samples,
             mode=mode,
             top_k=args.top_k,

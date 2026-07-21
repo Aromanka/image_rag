@@ -82,6 +82,7 @@ class EvaluateImageServerTests(unittest.TestCase):
             evaluator.image_server, "_run_inference", return_value=(raw_result["output"], raw_result)
         ) as inference:
             records = evaluator._evaluate_mode(
+                dataset=evaluator.INSPECSAFE,
                 samples=[sample],
                 mode=evaluator.image_server.ACCURACY_MODE,
                 top_k=7,
@@ -122,6 +123,7 @@ class EvaluateImageServerTests(unittest.TestCase):
         ):
             with patch.object(evaluator.tqdm, "write") as terminal_write:
                 records = evaluator._evaluate_mode(
+                    dataset=evaluator.CONSTRUCTIONSITE10K,
                     samples=[sample],
                     mode=evaluator.image_server.LATENCY_MODE,
                     top_k=5,
@@ -137,6 +139,67 @@ class EvaluateImageServerTests(unittest.TestCase):
         self.assertIn("/data/constructionsite/images/query.jpg", message)
         self.assertIn(f"query_image={sample.image_path}", message)
         self.assertEqual(records[0]["status"], "error")
+
+    def test_rag_tasks_use_their_corresponding_databases(self) -> None:
+        cases = [
+            (
+                evaluator.CONSTRUCTIONSITE10K,
+                evaluator.CONSTRUCTIONSITE10K_TASK,
+                evaluator.CONSTRUCTIONSITE10K_DATASET,
+                '{"annotation":"Missing PPE.","violations":[{"rule":1}]}',
+                "unsafe",
+            ),
+            (
+                evaluator.LABSAFETY_GEN,
+                evaluator.LAB_SAFETY_GEN_TASK,
+                evaluator.LAB_SAFETY_GEN_DATASET,
+                "Query image observations: missing goggles.\nFinal label: hazardous",
+                "unsafe",
+            ),
+        ]
+
+        for dataset, task, rag_database, output, expected_label in cases:
+            with self.subTest(dataset=dataset):
+                raw_result = {
+                    "output": output,
+                    "rag_dataset": rag_database,
+                    "gated_rag": evaluator.image_server.ACCURACY_GATE,
+                    "retrieved_count_before_gate": 5,
+                    "retrieved_count": 3,
+                }
+                with patch.object(
+                    evaluator.image_server,
+                    "VLM_inference_with_RAG",
+                    return_value=raw_result,
+                ) as rag_inference:
+                    actual_output, result = evaluator._run_dataset_inference(
+                        dataset=dataset,
+                        image_path=Path("query.jpg"),
+                        mode=evaluator.image_server.ACCURACY_MODE,
+                        top_k=7,
+                        max_new_tokens=384,
+                        stage_one_max_new_tokens=8,
+                        stage_two_max_new_tokens=128,
+                    )
+
+                rag_inference.assert_called_once_with(
+                    task,
+                    Path("query.jpg"),
+                    top_k=7,
+                    gated_rag=evaluator.image_server.ACCURACY_GATE,
+                    rag_dataset=rag_database,
+                    max_new_tokens=384,
+                )
+                payload = evaluator._build_dataset_success_payload(
+                    dataset=dataset,
+                    mode=evaluator.image_server.ACCURACY_MODE,
+                    output=actual_output,
+                    result=result,
+                    elapsed=1.0,
+                )
+                self.assertEqual(payload["safe"], expected_label)
+                self.assertEqual(payload["rag_task"], task)
+                self.assertEqual(payload["rag_dataset"], rag_database)
 
     def test_inspecsafe_loader_maps_labels_and_reference_caption(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
