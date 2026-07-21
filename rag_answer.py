@@ -134,6 +134,17 @@ Step 3 - Output the following JSON only, no extra text:
 If no violations are found, return an empty list for violations."""
 
 
+BALANCED_RAG_SYSTEM_PROMPT = """You are evaluating the overall safety condition shown in a query image.
+
+The preceding reference images are retrieved historical examples. Use their
+visible conditions and labels only to calibrate your judgement. The query image
+is always the primary evidence: do not copy a reference label or infer hazards
+that are not visible in the query image.
+
+Follow the final instruction for the query image exactly, including its required
+output format."""
+
+
 def build_prompt(query: str, retrieved_items: list[dict[str, Any]]) -> str:
     examples = []
     for index, item in enumerate(retrieved_items, start=1):
@@ -254,6 +265,56 @@ def build_rag_messages(
             "content": "You are a construction safety visual inspection assistant. "
             "Use the reference images to inform your judgement of the query image.",
         },
+        {"role": "user", "content": content},
+    ]
+
+
+def build_balanced_two_stage_rag_messages(
+    stage_prompt: str,
+    query_image_path: str | Path,
+    retrieved_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build one balanced-mode stage using a fixed set of RAG references."""
+    content: list[dict[str, str]] = []
+
+    for index, item in enumerate(retrieved_items, start=1):
+        image_path = Path(item["image_path"])
+        if not image_path.is_absolute():
+            image_path = PROJECT_ROOT / image_path
+
+        description = (
+            item.get("description")
+            or item.get("scene_description")
+            or item.get("caption")
+            or item.get("annotation")
+            or ""
+        )
+        label = item.get("safe_label") or item.get("label") or ""
+        details = [f"Reference {index}:"]
+        if description:
+            details.append(f"Description: {description}")
+        if label:
+            details.append(f"Ground-truth safety label: {label}")
+        if item.get("hazards"):
+            details.append(f"Hazards: {item['hazards']}")
+        if item.get("violation_rules"):
+            details.append(f"Violation rules: {item['violation_rules']}")
+
+        content.append({"type": "image", "image": str(image_path)})
+        content.append({"type": "text", "text": "\n".join(details)})
+
+    content.append({"type": "image", "image": str(query_image_path)})
+    content.append({
+        "type": "text",
+        "text": (
+            "Query image instructions:\n"
+            f"{stage_prompt}\n\n"
+            "Apply the instructions only to the query image."
+        ),
+    })
+
+    return [
+        {"role": "system", "content": BALANCED_RAG_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 

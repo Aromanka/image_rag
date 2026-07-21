@@ -698,6 +698,80 @@ def VLM_inference_two_stage(
     }
 
 
+def VLM_inference_two_stage_with_RAG(
+    task_type: str,
+    query_image: str | Path,
+    *,
+    query: str | None = None,
+    top_k: int = TOP_K,
+    gated_rag: float = GATED_RAG,
+    rag_dataset: str | None = None,
+    stage_one_max_new_tokens: int = INSPECSAFE_STAGE_ONE_MAX_NEW_TOKENS,
+    stage_two_max_new_tokens: int = INSPECSAFE_STAGE_TWO_MAX_NEW_TOKENS,
+) -> dict[str, Any]:
+    """Run two-stage safety inference with one shared RAG retrieval result."""
+    from rag_answer import build_balanced_two_stage_rag_messages
+    from retrieval_gating import gate_retrieval_results
+    from retriever import search_by_query_image
+    from two_stage_inference import run_two_stage_safety_inference
+
+    task_type = _validate_task_type(task_type)
+    if task_type != SAFETY_JUDGEMENT_TASK:
+        raise ValueError(
+            "Two-stage RAG inference currently supports only 'safety judgement'."
+        )
+
+    query = query or _default_query_for_task(task_type)
+    image_path = _resolve_query_image_path(query_image)
+    retrieval_dataset = rag_dataset or TASK_TO_RAG_DATASET[task_type]
+
+    # Retrieve exactly once. Both generation stages close over this same list.
+    top_k_retrieved = search_by_query_image(
+        image_path,
+        top_k=top_k,
+        dataset=retrieval_dataset,
+    )
+    retrieved = gate_retrieval_results(top_k_retrieved, gated_rag)
+    stage_messages: list[list[dict[str, Any]]] = []
+
+    def generate_with_shared_rag(
+        _: str | Path,
+        stage_prompt: str,
+        max_new_tokens: int,
+    ) -> str:
+        messages = build_balanced_two_stage_rag_messages(
+            stage_prompt,
+            image_path,
+            retrieved,
+        )
+        stage_messages.append(messages)
+        return _run_vlm_messages(messages, max_new_tokens=max_new_tokens)
+
+    result = run_two_stage_safety_inference(
+        image_path,
+        query,
+        generate_with_shared_rag,
+        stage_one_max_new_tokens=stage_one_max_new_tokens,
+        stage_two_max_new_tokens=stage_two_max_new_tokens,
+    )
+    return {
+        "task_type": task_type,
+        "query_image": str(image_path),
+        "query": query,
+        "top_k": top_k,
+        "gated_rag": float(gated_rag),
+        "rag_dataset": retrieval_dataset,
+        "retrieved_count_before_gate": len(top_k_retrieved),
+        "retrieved_count": len(retrieved),
+        "retrieved": retrieved,
+        "prompt": {
+            "stage_one": stage_messages[0] if stage_messages else None,
+            "stage_two": stage_messages[1] if len(stage_messages) > 1 else None,
+        },
+        **result,
+    }
+
+
 def VLM_inference_with_RAG(
     task_type: str,
     query_image: str | Path,

@@ -1,7 +1,14 @@
 """Model-free tests for the two-stage InspecSafe decision policy."""
 
 import unittest
+from pathlib import Path
+import sys
+import types
+from unittest.mock import Mock, patch
 
+import rag_answer
+import retrieval_gating
+import vlm_inference
 from two_stage_inference import run_two_stage_safety_inference
 
 
@@ -16,6 +23,63 @@ class StubGenerator:
 
 
 class TwoStageSafetyInferenceTests(unittest.TestCase):
+    def test_balanced_rag_retrieves_once_and_reuses_results(self) -> None:
+        top_k_results = [{"image_path": "reference.jpg", "safe_label": "unsafe"}]
+        shared_retrieved = [top_k_results[0]]
+        stage_messages = [[{"role": "user", "content": "stage"}]]
+        search = Mock(return_value=top_k_results)
+        retriever_stub = types.ModuleType("retriever")
+        retriever_stub.search_by_query_image = search
+
+        with patch.dict(sys.modules, {"retriever": retriever_stub}):
+            with patch.object(
+                vlm_inference,
+                "_resolve_query_image_path",
+                return_value=Path("query.jpg"),
+            ):
+                with patch.object(
+                    retrieval_gating,
+                    "gate_retrieval_results",
+                    return_value=shared_retrieved,
+                ) as gate:
+                    with patch.object(
+                        rag_answer,
+                        "build_balanced_two_stage_rag_messages",
+                        return_value=stage_messages,
+                    ) as build_messages:
+                        with patch.object(
+                            vlm_inference,
+                            "_run_vlm_messages",
+                            side_effect=[
+                                "unsafe",
+                                "Annotation: Missing hard hat.\nFinal label: unsafe",
+                            ],
+                        ) as generate:
+                            result = vlm_inference.VLM_inference_two_stage_with_RAG(
+                                "safety judgement",
+                                Path("query.jpg"),
+                                query="Inspect the image.",
+                                top_k=3,
+                                gated_rag=0.7,
+                                rag_dataset="constructionsite10k",
+                                stage_one_max_new_tokens=8,
+                                stage_two_max_new_tokens=128,
+                            )
+
+        search.assert_called_once_with(
+            Path("query.jpg"),
+            top_k=3,
+            dataset="constructionsite10k",
+        )
+        gate.assert_called_once_with(top_k_results, 0.7)
+        self.assertEqual(build_messages.call_count, 2)
+        self.assertIs(build_messages.call_args_list[0].args[2], shared_retrieved)
+        self.assertIs(build_messages.call_args_list[1].args[2], shared_retrieved)
+        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(result["top_k"], 3)
+        self.assertEqual(result["retrieved"], shared_retrieved)
+        self.assertEqual(result["label"], "unsafe")
+
     def test_safe_first_stage_skips_second_generation(self) -> None:
         generator = StubGenerator(["safe"])
 

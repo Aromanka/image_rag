@@ -201,6 +201,52 @@ class EvaluateImageServerTests(unittest.TestCase):
                 self.assertEqual(payload["rag_task"], task)
                 self.assertEqual(payload["rag_dataset"], rag_database)
 
+    def test_balanced_evaluation_uses_dataset_database_and_fixed_policy(self) -> None:
+        raw_result = {
+            "task_type": "safety judgement",
+            "label": "safe",
+            "annotation": "",
+            "output": "safe",
+            "top_k": 3,
+            "gated_rag": evaluator.image_server.BALANCED_GATE,
+            "rag_dataset": evaluator.CONSTRUCTIONSITE10K_DATASET,
+            "retrieved_count_before_gate": 3,
+            "retrieved_count": 2,
+        }
+        with patch.object(
+            evaluator.image_server,
+            "_run_balanced_inference",
+            return_value=("safe", raw_result),
+        ) as balanced:
+            output, result = evaluator._run_dataset_inference(
+                dataset=evaluator.CONSTRUCTIONSITE10K,
+                image_path=Path("query.jpg"),
+                mode=evaluator.image_server.BALANCED_MODE,
+                top_k=49,
+                max_new_tokens=384,
+                stage_one_max_new_tokens=8,
+                stage_two_max_new_tokens=128,
+            )
+
+        balanced.assert_called_once_with(
+            image_path=Path("query.jpg"),
+            rag_dataset=evaluator.CONSTRUCTIONSITE10K_DATASET,
+            stage_one_max_new_tokens=8,
+            stage_two_max_new_tokens=128,
+        )
+        payload = evaluator._build_dataset_success_payload(
+            dataset=evaluator.CONSTRUCTIONSITE10K,
+            mode=evaluator.image_server.BALANCED_MODE,
+            output=output,
+            result=result,
+            elapsed=1.0,
+        )
+        self.assertEqual(payload["safe"], "safe")
+        self.assertEqual(payload["top_k"], 3)
+        self.assertEqual(
+            payload["rag_dataset"], evaluator.CONSTRUCTIONSITE10K_DATASET
+        )
+
     def test_inspecsafe_loader_maps_labels_and_reference_caption(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             csv_path = Path(temp_dir) / "test.csv"

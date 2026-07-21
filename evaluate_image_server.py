@@ -367,7 +367,25 @@ def _run_dataset_inference(
     stage_two_max_new_tokens: int,
 ) -> tuple[str, dict[str, Any]]:
     """Run a server mode while selecting the RAG task/database by dataset."""
-    if mode == image_server.LATENCY_MODE or dataset == INSPECSAFE:
+    if mode == image_server.LATENCY_MODE:
+        return image_server._run_inference(
+            image_path=image_path,
+            mode=mode,
+            top_k=top_k,
+            max_new_tokens=max_new_tokens,
+            stage_one_max_new_tokens=stage_one_max_new_tokens,
+            stage_two_max_new_tokens=stage_two_max_new_tokens,
+        )
+
+    if mode == image_server.BALANCED_MODE:
+        return image_server._run_balanced_inference(
+            image_path=image_path,
+            rag_dataset=RAG_DATABASE_BY_DATASET[dataset],
+            stage_one_max_new_tokens=stage_one_max_new_tokens,
+            stage_two_max_new_tokens=stage_two_max_new_tokens,
+        )
+
+    if dataset == INSPECSAFE:
         return image_server._run_inference(
             image_path=image_path,
             mode=mode,
@@ -421,7 +439,7 @@ def _build_dataset_success_payload(
     result: dict[str, Any],
     elapsed: float,
 ) -> dict[str, Any]:
-    if mode == image_server.LATENCY_MODE:
+    if mode in {image_server.LATENCY_MODE, image_server.BALANCED_MODE}:
         return image_server._build_success_response_payload(
             mode, output, result, elapsed
         )
@@ -576,7 +594,9 @@ def run_evaluation(args: argparse.Namespace) -> Path:
     print(
         "Evaluation RAG routing: "
         f"task={RAG_TASK_BY_DATASET[dataset]} "
-        f"database={RAG_DATABASE_BY_DATASET[dataset]}",
+        f"database={RAG_DATABASE_BY_DATASET[dataset]} | "
+        f"balanced_task={image_server.SAFETY_JUDGEMENT_TASK} "
+        f"balanced_top_k={image_server.BALANCED_TOP_K}",
         flush=True,
     )
     if not args.no_preload:
@@ -594,8 +614,11 @@ def run_evaluation(args: argparse.Namespace) -> Path:
             "stage_one_max_new_tokens": args.stage_one_max_new_tokens,
             "stage_two_max_new_tokens": args.stage_two_max_new_tokens,
             "accuracy_gate": image_server.ACCURACY_GATE,
+            "balanced_top_k": image_server.BALANCED_TOP_K,
+            "balanced_gate": image_server.BALANCED_GATE,
             "rag_task": RAG_TASK_BY_DATASET[dataset],
             "rag_dataset": RAG_DATABASE_BY_DATASET[dataset],
+            "balanced_rag_task": image_server.SAFETY_JUDGEMENT_TASK,
             "lora_weights": image_server.active_lora_weights(),
             "sbert_model_path": None if args.skip_sbert else str(args.sbert_path),
             "sbert_reference": (
@@ -682,7 +705,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-root", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--top-k", type=int, default=image_server.TOP_K)
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=image_server.TOP_K,
+        help="RAG top-k for accuracy/energy; balanced always uses top-k 3.",
+    )
     parser.add_argument(
         "--max-new-tokens",
         type=int,

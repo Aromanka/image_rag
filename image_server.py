@@ -51,6 +51,7 @@ from utils.local_test_channel import LocalTestHub
 from utils.local_test_data import SUPPORTED_LOCAL_TEST_DATASETS, normalize_dataset
 from vlm_inference import (
     VLM_inference_two_stage,
+    VLM_inference_two_stage_with_RAG,
     VLM_inference_with_RAG,
     active_lora_weights,
     add_lora_cli_arg,
@@ -64,7 +65,8 @@ LATENCY_MODE = "latency"
 ENERGY_MODE = "energy"
 BALANCED_MODE = "balanced"
 SUPPORTED_MODES = {ACCURACY_MODE, LATENCY_MODE, ENERGY_MODE, BALANCED_MODE}
-RAG_MODES = {ACCURACY_MODE, ENERGY_MODE, BALANCED_MODE}
+SAFETY_LEVEL_RAG_MODES = {ACCURACY_MODE, ENERGY_MODE}
+RAG_MODES = SAFETY_LEVEL_RAG_MODES | {BALANCED_MODE}
 MODE_ALIASES = {
     "accuracy-first": ACCURACY_MODE,
     "latency-first": LATENCY_MODE,
@@ -72,6 +74,10 @@ MODE_ALIASES = {
     "balanced-mode": BALANCED_MODE,
 }
 ACCURACY_GATE = 0.7
+# Balanced mode keeps latency's two-stage decision policy, but calibrates both
+# stages with one shared top-3 retrieval performed before stage one.
+BALANCED_TOP_K = 3
+BALANCED_GATE = ACCURACY_GATE
 
 # Accuracy-first follows the fine-tuned InspecSafe evaluation task. The full
 # system prompt and JSON schema are supplied by the safety-level RAG builder.
@@ -82,11 +88,7 @@ SAFETY_PROMPT = """You are evaluating the overall safety condition shown in the 
 
 Classify the image as UNSAFE only when clearly visible evidence shows an unsafe
 action, missing required personal protective equipment, or a definite workplace
-hazard. Otherwise classify it as SAFE.
-
-Use only visible evidence from the query image. Do not infer hidden risks, assume
-missing information, or treat ordinary construction or laboratory activity as
-unsafe by itself."""
+hazard. Otherwise classify it as SAFE."""
 
 IMAGE_SUFFIXES = {
     "JPEG": ".jpg",
@@ -201,7 +203,7 @@ def _parse_energy_response(output: str) -> dict[str, str]:
 
 
 def _parse_balanced_response(output: str) -> dict[str, str]:
-    return _parse_accuracy_response(output)
+    return _parse_latency_response(output)
 
 
 MODE_RESPONSE_PARSERS = {
@@ -233,8 +235,10 @@ def _build_success_response_payload(
     if mode in RAG_MODES:
         response_payload.update(
             {
-                "rag_dataset": INSPECSAFE_DATASET,
-                "gated_rag": ACCURACY_GATE,
+                "rag_task": result.get("task_type"),
+                "rag_dataset": result.get("rag_dataset", INSPECSAFE_DATASET),
+                "top_k": result.get("top_k"),
+                "gated_rag": result.get("gated_rag", ACCURACY_GATE),
                 "retrieved_count_before_gate": result.get(
                     "retrieved_count_before_gate", 0
                 ),
@@ -242,6 +246,26 @@ def _build_success_response_payload(
             }
         )
     return response_payload
+
+
+def _run_balanced_inference(
+    *,
+    image_path: Path,
+    rag_dataset: str = INSPECSAFE_DATASET,
+    stage_one_max_new_tokens: int,
+    stage_two_max_new_tokens: int,
+) -> tuple[str, dict]:
+    result = VLM_inference_two_stage_with_RAG(
+        SAFETY_JUDGEMENT_TASK,
+        image_path,
+        query=SAFETY_PROMPT,
+        top_k=BALANCED_TOP_K,
+        gated_rag=BALANCED_GATE,
+        rag_dataset=rag_dataset,
+        stage_one_max_new_tokens=stage_one_max_new_tokens,
+        stage_two_max_new_tokens=stage_two_max_new_tokens,
+    )
+    return _format_latency_response(result), result
 
 
 def _run_inference(
@@ -253,7 +277,15 @@ def _run_inference(
     stage_one_max_new_tokens: int,
     stage_two_max_new_tokens: int,
 ) -> tuple[str, dict]:
-    if mode in RAG_MODES:
+    if mode == BALANCED_MODE:
+        return _run_balanced_inference(
+            image_path=image_path,
+            rag_dataset=INSPECSAFE_DATASET,
+            stage_one_max_new_tokens=stage_one_max_new_tokens,
+            stage_two_max_new_tokens=stage_two_max_new_tokens,
+        )
+
+    if mode in SAFETY_LEVEL_RAG_MODES:
         result = VLM_inference_with_RAG(
             SAFETY_LEVEL_TASK,
             image_path,
@@ -337,7 +369,7 @@ def create_app(
 
     app = FastAPI(
         title="Image safety inference",
-        version="3.0.0",
+        version="3.1.0",
         lifespan=lifespan,
     )
     app.state.local_test_hub = local_test_hub
@@ -349,7 +381,10 @@ def create_app(
             "modes": sorted(SUPPORTED_MODES),
             "accuracy_rag_dataset": INSPECSAFE_DATASET,
             "accuracy_gate": ACCURACY_GATE,
-            "placeholder_modes": sorted({ENERGY_MODE, BALANCED_MODE}),
+            "balanced_rag_dataset": INSPECSAFE_DATASET,
+            "balanced_top_k": BALANCED_TOP_K,
+            "balanced_gate": BALANCED_GATE,
+            "placeholder_modes": sorted({ENERGY_MODE}),
             "lora_weights": active_lora_weights(),
             "local_test": {
                 "enabled": local_test_hub.enabled,
@@ -437,12 +472,21 @@ def create_app(
 
         try:
             suffix = _image_suffix(payload)
-            effective_top_k = top_k or default_top_k
+            effective_top_k = (
+                BALANCED_TOP_K
+                if selected_mode == BALANCED_MODE
+                else top_k or default_top_k
+            )
+            effective_gate = (
+                BALANCED_GATE
+                if selected_mode == BALANCED_MODE
+                else ACCURACY_GATE
+            )
             print(
                 f"Inference started: mode={selected_mode} bytes={len(payload)}"
                 + (
                     f" rag_dataset={INSPECSAFE_DATASET} "
-                    f"top_k={effective_top_k} gate={ACCURACY_GATE}"
+                    f"top_k={effective_top_k} gate={effective_gate}"
                     if selected_mode in RAG_MODES
                     else ""
                 ),
@@ -532,7 +576,12 @@ def create_app(
             ...,
             description="Inference mode: accuracy, latency, energy, or balanced.",
         ),
-        top_k: int | None = Query(default=None, ge=1, le=MAX_TOP_K),
+        top_k: int | None = Query(
+            default=None,
+            ge=1,
+            le=MAX_TOP_K,
+            description="RAG top-k override; balanced mode always uses top-k 3.",
+        ),
         local_test_dataset: str | None = Query(
             default=None,
             description="Optional display dataset association hint.",
@@ -588,7 +637,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--top-k", type=int, default=TOP_K)
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=TOP_K,
+        help="Default RAG top-k; balanced mode always uses top-k 3.",
+    )
     parser.add_argument(
         "--max-new-tokens",
         type=int,

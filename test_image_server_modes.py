@@ -60,9 +60,9 @@ class ImageServerModeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             image_server._normalize_mode("unknown")
 
-    def test_accuracy_energy_and_balanced_use_inspecsafe_level_rag(self) -> None:
+    def test_accuracy_and_energy_use_inspecsafe_level_rag(self) -> None:
         rag_result = {"output": '{"overall_safety_level":"Level IV"}'}
-        for mode in image_server.RAG_MODES:
+        for mode in image_server.SAFETY_LEVEL_RAG_MODES:
             with self.subTest(mode=mode):
                 with patch.object(
                     image_server,
@@ -89,6 +89,40 @@ class ImageServerModeTests(unittest.TestCase):
                     rag_dataset=INSPECSAFE_DATASET,
                     max_new_tokens=384,
                 )
+
+    def test_balanced_uses_two_stage_rag_with_fixed_top_k(self) -> None:
+        balanced_result = {
+            "label": "unsafe",
+            "annotation": "Worker is missing a hard hat.",
+        }
+        with patch.object(
+            image_server,
+            "VLM_inference_two_stage_with_RAG",
+            return_value=balanced_result,
+        ) as balanced_inference:
+            with patch.object(image_server, "VLM_inference_with_RAG") as level_rag:
+                output, result = image_server._run_inference(
+                    image_path=Path("query.jpg"),
+                    mode=image_server.BALANCED_MODE,
+                    top_k=17,
+                    max_new_tokens=384,
+                    stage_one_max_new_tokens=8,
+                    stage_two_max_new_tokens=128,
+                )
+
+        self.assertEqual(output, "unsafe Worker is missing a hard hat.")
+        self.assertIs(result, balanced_result)
+        level_rag.assert_not_called()
+        balanced_inference.assert_called_once_with(
+            SAFETY_JUDGEMENT_TASK,
+            Path("query.jpg"),
+            query=image_server.SAFETY_PROMPT,
+            top_k=3,
+            gated_rag=image_server.BALANCED_GATE,
+            rag_dataset=INSPECSAFE_DATASET,
+            stage_one_max_new_tokens=8,
+            stage_two_max_new_tokens=128,
+        )
 
     def test_latency_mode_keeps_existing_two_stage_path(self) -> None:
         latency_result = {"label": "unsafe", "annotation": "Smoke is visible."}
@@ -168,6 +202,12 @@ class ImageServerModeTests(unittest.TestCase):
         for output, expected in cases.items():
             with self.subTest(output=output):
                 self.assertEqual(image_server._parse_latency_response(output), expected)
+
+    def test_balanced_parser_uses_two_stage_output(self) -> None:
+        self.assertEqual(
+            image_server._parse_balanced_response("unsafe Missing hard hat."),
+            {"safe": "unsafe", "annotation": "Missing hard hat."},
+        )
 
     def test_each_mode_has_an_independent_parser_entry(self) -> None:
         expected_parsers = {
