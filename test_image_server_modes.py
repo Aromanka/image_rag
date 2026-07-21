@@ -116,7 +116,7 @@ class ImageServerModeTests(unittest.TestCase):
         balanced_inference.assert_called_once_with(
             SAFETY_JUDGEMENT_TASK,
             Path("query.jpg"),
-            query=image_server.SAFETY_PROMPT,
+            query=image_server.BALANCED_SAFETY_PROMPT,
             top_k=3,
             gated_rag=image_server.BALANCED_GATE,
             rag_dataset=INSPECSAFE_DATASET,

@@ -137,11 +137,7 @@ If no violations are found, return an empty list for violations."""
 BALANCED_RAG_SYSTEM_PROMPT = """You are evaluating the overall safety condition shown in a query image.
 
 The preceding reference images are retrieved historical examples. Use their
-visible conditions and labels only to calibrate your judgement. The query image
-is always the primary evidence: do not copy a reference label or infer hazards
-that are not visible in the query image.
-
-Follow the final instruction for the query image exactly, including its required
+visible conditions and labels only to calibrate your judgement. Follow the final instruction for the query image exactly, including its required
 output format."""
 
 

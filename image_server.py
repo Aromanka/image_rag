@@ -90,6 +90,9 @@ Classify the image as UNSAFE only when clearly visible evidence shows an unsafe
 action, missing required personal protective equipment, or a definite workplace
 hazard. Otherwise classify it as SAFE."""
 
+# Balanced mode has an independent RAG-oriented base prompt.
+BALANCED_SAFETY_PROMPT = """Inspect this industrial site image and check if it is SAFE or UNSAFE."""
+
 IMAGE_SUFFIXES = {
     "JPEG": ".jpg",
     "PNG": ".png",
@@ -258,7 +261,7 @@ def _run_balanced_inference(
     result = VLM_inference_two_stage_with_RAG(
         SAFETY_JUDGEMENT_TASK,
         image_path,
-        query=SAFETY_PROMPT,
+        query=BALANCED_SAFETY_PROMPT,
         top_k=BALANCED_TOP_K,
         gated_rag=BALANCED_GATE,
         rag_dataset=rag_dataset,
