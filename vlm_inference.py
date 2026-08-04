@@ -217,7 +217,7 @@ def _prepare_internvl_optional_imports() -> None:
 
 
 @lru_cache(maxsize=1)
-def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
+def _vlm_components() -> list[Any]:
     import torch
 
     backend = _infer_vlm_backend()
@@ -244,7 +244,7 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
             trust_remote_code=True,
         )
         model.eval()
-        return model, processor, backend, None, torch
+        return [model, processor, backend, None, torch]
 
     if backend == INTERNVL_BACKEND:
         _prepare_internvl_optional_imports()
@@ -275,7 +275,7 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
         if img_context_token_id is not None:
             model.img_context_token_id = img_context_token_id
         model.eval()
-        return model, tokenizer, backend, _build_internvl_transform(), torch
+        return [model, tokenizer, backend, _build_internvl_transform(), torch]
 
     from qwen_vl_utils import process_vision_info
     from transformers import AutoProcessor
@@ -295,7 +295,65 @@ def _vlm_components() -> tuple[Any, Any, str, Any, Any]:
     model = _apply_lora_weights(model)
     processor = AutoProcessor.from_pretrained(str(_processor_path_for_lora()))
     model.eval()
-    return model, processor, backend, process_vision_info, torch
+    return [model, processor, backend, process_vision_info, torch]
+
+
+def switch_lora_weights(
+    lora_weights: str | Path,
+    *,
+    adapter_name: str,
+) -> str:
+    """Load and activate a LoRA adapter without reloading the base VLM."""
+    global _ACTIVE_LORA_WEIGHTS
+
+    normalized = _normalize_optional_path(lora_weights)
+    if normalized is None or not normalized.exists():
+        raise FileNotFoundError(f"LoRA weights path not found: {normalized}")
+    if normalized == _ACTIVE_LORA_WEIGHTS:
+        return str(normalized)
+
+    try:
+        from peft import PeftModel
+        from transformers import AutoProcessor
+    except ImportError as exc:
+        raise RuntimeError(
+            "LoRA switching requires the 'peft' and 'transformers' packages."
+        ) from exc
+
+    components = _vlm_components()
+    model, _, backend, _, _ = components
+    if backend == INTERNVL_BACKEND:
+        raise RuntimeError("Runtime LoRA switching is not supported for InternVL.")
+
+    # Prepare the matching processor before changing the active adapter. This
+    # leaves the current model usable if the target directory is incomplete.
+    processor = AutoProcessor.from_pretrained(
+        str(normalized),
+        trust_remote_code=True,
+    )
+
+    if isinstance(model, PeftModel):
+        if adapter_name not in model.peft_config:
+            model.load_adapter(
+                str(normalized),
+                adapter_name=adapter_name,
+                is_trainable=False,
+            )
+        model.set_adapter(adapter_name)
+    else:
+        model = PeftModel.from_pretrained(
+            model,
+            str(normalized),
+            adapter_name=adapter_name,
+            is_trainable=False,
+        )
+        components[0] = model
+
+    components[1] = processor
+    model.eval()
+    _ACTIVE_LORA_WEIGHTS = normalized
+    print(f"Activated LoRA weights: {normalized} ({adapter_name})", flush=True)
+    return str(normalized)
 
 
 configure_lora_weights(os.environ.get("VLM_LORA_WEIGHTS") or VLM_LORA_WEIGHTS)

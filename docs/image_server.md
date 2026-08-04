@@ -46,10 +46,11 @@ instruction is:
 Inspect this industrial site image and provide your safety assessment.
 ```
 
-The base model, processor, and optional LoRA adapter are loaded from
-`VLM_MODEL_PATH`, `VLM_PROCESSOR_PATH`, and `VLM_LORA_WEIGHTS` in `config.py`,
-using the same model-loading path as the rest of the server. The default output
-limit for these structured results is
+The base model and processor are loaded from `VLM_MODEL_PATH` and
+`VLM_PROCESSOR_PATH` in `config.py`. The initial optional adapter still comes
+from `VLM_LORA_WEIGHTS` (or `--lora-weights`), and can then be replaced through
+the fixed runtime choices described below. The default output limit for these
+structured results is
 `INSPECSAFE_SAFETY_LEVEL_MAX_NEW_TOKENS` (currently 384).
 
 Energy-first and Balanced currently execute this exact same pipeline. They are
@@ -87,6 +88,39 @@ python image_server.py --host 0.0.0.0 --port 8000
 By default, the server preloads SigLIP2 and the configured VLM. Wait for
 `Model loading complete. Server is ready.` before sending an image. The service
 uses one worker and accepts one inference at a time.
+
+## Switch the LoRA model
+
+The base VLM stays loaded while the active LoRA adapter is switched. Send a
+`POST` request to `/model/switch` with one of the three fixed `model` query
+values configured in `config.py`:
+
+| Model | LoRA configuration |
+| --- | --- |
+| `constructionsite` | `VLM_LORA_WEIGHTS_constructionsite` |
+| `inspecsafe` | `VLM_LORA_WEIGHTS_inspecsafe` |
+| `labsafety` | `VLM_LORA_WEIGHTS_labsafety` |
+
+```bash
+curl -X POST "http://SERVER_IP:8000/model/switch?model=inspecsafe"
+```
+
+A successful response is:
+
+```json
+{
+  "status": "success",
+  "model": "inspecsafe",
+  "lora_weights": "/absolute/project/path/lora_weights/gemma3_4b_lora_inspecsafe",
+  "changed": true
+}
+```
+
+Selecting the already-active model succeeds with `changed: false`. The switch
+endpoint and `/infer` share the VLM lock. If either operation is already in
+progress, the other returns a `BUSY` response and the client should retry.
+Invalid model values return HTTP 400. `GET /health` reports the active
+`lora_model`, its `lora_weights` path, and all supported `lora_models`.
 
 Available startup options include:
 
@@ -214,6 +248,9 @@ together. The normal command therefore needs no dataset paths:
 ```powershell
 python utils/local_test_display.py \
   --server "ws://127.0.0.1:18000/local-test/ws"
+python utils/local_test_display.py \
+--annotations data/local_test_batch/labsafety_gen/annotations.jsonl \
+--image-root data/local_test_batch/labsafety_gen
 ```
 
 Use `--dataset labsafety_gen` or `--dataset inspecsafe_safety_level` to select
@@ -282,7 +319,7 @@ one or more trials to JSONL:
 
 ```bash
 python utils/evaluate_local_test_results.py \
-  save/local_test_labsafety_gen_20260717_130735.jsonl
+  save/local_test_inspecsafe_safety_level_20260723_152715.jsonl
 ```
 
 Optionally save the machine-readable report:

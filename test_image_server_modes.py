@@ -1,11 +1,14 @@
 """Model-free tests for image-server mode routing."""
 
 import ast
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import image_server
+import vlm_inference
 from config import (
     INSPECSAFE_DATASET,
     SAFETY_JUDGEMENT_TASK,
@@ -15,6 +18,107 @@ from config import (
 
 
 class ImageServerModeTests(unittest.TestCase):
+    def test_switches_lora_without_reloading_base_model(self) -> None:
+        class FakePeftModel:
+            def __init__(self) -> None:
+                self.peft_config = {"constructionsite": object()}
+                self.loaded: list[tuple[str, str]] = []
+                self.active = "constructionsite"
+
+            @classmethod
+            def from_pretrained(
+                cls,
+                base_model: object,
+                path: str,
+                *,
+                adapter_name: str,
+                is_trainable: bool,
+            ) -> "FakePeftModel":
+                self = cls()
+                self.base_model = base_model
+                self.initial_path = path
+                self.initial_is_trainable = is_trainable
+                self.active = adapter_name
+                return self
+
+            def load_adapter(
+                self,
+                path: str,
+                *,
+                adapter_name: str,
+                is_trainable: bool,
+            ) -> None:
+                self.loaded.append((adapter_name, path))
+                self.peft_config[adapter_name] = object()
+
+            def set_adapter(self, adapter_name: str) -> None:
+                self.active = adapter_name
+
+            def eval(self) -> None:
+                pass
+
+        class FakeAutoProcessor:
+            @classmethod
+            def from_pretrained(cls, path: str, **_: object) -> str:
+                return f"processor:{path}"
+
+        peft_module = types.ModuleType("peft")
+        peft_module.PeftModel = FakePeftModel
+        transformers_module = types.ModuleType("transformers")
+        transformers_module.AutoProcessor = FakeAutoProcessor
+        components = [object(), object(), vlm_inference.GEMMA3_BACKEND, None, object()]
+
+        with patch.dict(
+            sys.modules,
+            {"peft": peft_module, "transformers": transformers_module},
+        ):
+            with patch.object(vlm_inference, "_vlm_components", return_value=components):
+                with patch.object(vlm_inference, "_ACTIVE_LORA_WEIGHTS", None):
+                    first = vlm_inference.switch_lora_weights(
+                        image_server.LORA_MODELS["constructionsite"],
+                        adapter_name="constructionsite",
+                    )
+                    base_model = components[0].base_model
+                    second = vlm_inference.switch_lora_weights(
+                        image_server.LORA_MODELS["inspecsafe"],
+                        adapter_name="inspecsafe",
+                    )
+
+        self.assertIsInstance(components[0], FakePeftModel)
+        self.assertIs(components[0].base_model, base_model)
+        self.assertEqual(components[0].active, "inspecsafe")
+        self.assertEqual(len(components[0].loaded), 1)
+        self.assertEqual(first, str(Path(image_server.LORA_MODELS["constructionsite"]).resolve()))
+        self.assertEqual(second, str(Path(image_server.LORA_MODELS["inspecsafe"]).resolve()))
+
+    def test_normalizes_only_three_lora_models(self) -> None:
+        for model in ("constructionsite", "inspecsafe", "labsafety"):
+            with self.subTest(model=model):
+                self.assertEqual(image_server._normalize_lora_model(model), model)
+
+        self.assertEqual(
+            image_server._normalize_lora_model("  INSPECSAFE "),
+            "inspecsafe",
+        )
+        with self.assertRaises(ValueError):
+            image_server._normalize_lora_model("other")
+
+    def test_reports_active_fixed_lora_model(self) -> None:
+        configured = image_server.LORA_MODELS["labsafety"]
+        with patch.object(
+            image_server,
+            "active_lora_weights",
+            return_value=str(Path(configured).resolve()),
+        ):
+            self.assertEqual(image_server._active_lora_model(), "labsafety")
+
+        with patch.object(
+            image_server,
+            "active_lora_weights",
+            return_value=str(Path("custom-lora").resolve()),
+        ):
+            self.assertIsNone(image_server._active_lora_model())
+
     def test_server_defaults_to_configured_lora_for_latency_first(self) -> None:
         with patch.dict(image_server.os.environ, {"VLM_LORA_WEIGHTS": ""}):
             with patch.object(image_server, "configure_lora_weights") as configure:

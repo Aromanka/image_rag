@@ -44,6 +44,9 @@ from config import (
     TOP_K,
     UNIFIED_SAFETY_DATASET,
     VLM_LORA_WEIGHTS,
+    VLM_LORA_WEIGHTS_constructionsite,
+    VLM_LORA_WEIGHTS_inspecsafe,
+    VLM_LORA_WEIGHTS_labsafety,
 )
 from response_forwarding import forward_text_response
 from utils.evaluate_utils import extract_inspecsafe_safety_level_json
@@ -57,6 +60,7 @@ from vlm_inference import (
     add_lora_cli_arg,
     configure_lora_weights,
     preload_models,
+    switch_lora_weights,
 )
 
 
@@ -105,6 +109,36 @@ IMAGE_SUFFIXES = {
 # One worker owns one model. Requests received while inference is active return
 # BUSY immediately instead of accumulating in GPU memory.
 VLM_LOCK_OPEN = True
+
+LORA_MODELS = {
+    "constructionsite": VLM_LORA_WEIGHTS_constructionsite,
+    "inspecsafe": VLM_LORA_WEIGHTS_inspecsafe,
+    "labsafety": VLM_LORA_WEIGHTS_labsafety,
+}
+
+
+def _normalize_lora_model(model: str) -> str:
+    normalized = model.strip().lower()
+    if normalized not in LORA_MODELS:
+        choices = ", ".join(sorted(LORA_MODELS))
+        raise ValueError(
+            f"Unsupported model '{model}'. Choose one of: {choices}."
+        )
+    return normalized
+
+
+def _active_lora_model() -> str | None:
+    active = active_lora_weights()
+    if active is None:
+        return None
+    active_path = Path(active).resolve()
+    for model, weights in LORA_MODELS.items():
+        configured_path = Path(weights)
+        if not configured_path.is_absolute():
+            configured_path = Path(__file__).resolve().parent / configured_path
+        if configured_path.resolve() == active_path:
+            return model
+    return None
 
 
 def _configure_server_lora(lora_weights: str | Path | None) -> str | Path | None:
@@ -230,6 +264,7 @@ def _build_success_response_payload(
     response_payload: dict[str, object] = {
         "status": "success",
         "mode": mode,
+        "lora_model": _active_lora_model(),
         "lora_weights": active_lora_weights(),
         **_parse_mode_response(mode, output),
         "response": output,
@@ -388,7 +423,9 @@ def create_app(
             "balanced_top_k": BALANCED_TOP_K,
             "balanced_gate": BALANCED_GATE,
             "placeholder_modes": sorted({ENERGY_MODE}),
+            "lora_model": _active_lora_model(),
             "lora_weights": active_lora_weights(),
+            "lora_models": sorted(LORA_MODELS),
             "local_test": {
                 "enabled": local_test_hub.enabled,
                 "websocket_path": "/local-test/ws",
@@ -397,6 +434,59 @@ def create_app(
                 "history_size": local_test_hub.history_size,
             },
         }
+
+    @app.post("/model/switch", response_class=JSONResponse)
+    async def switch_model(
+        model: str = Query(
+            ...,
+            description="LoRA model: constructionsite, inspecsafe, or labsafety.",
+        ),
+    ) -> JSONResponse:
+        global VLM_LOCK_OPEN
+
+        try:
+            selected_model = _normalize_lora_model(model)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+        if not VLM_LOCK_OPEN:
+            return JSONResponse(
+                {
+                    "status": "BUSY",
+                    "model": selected_model,
+                    "active_model": _active_lora_model(),
+                    "lora_weights": active_lora_weights(),
+                },
+                headers={"X-VLM-Status": "BUSY"},
+            )
+
+        VLM_LOCK_OPEN = False
+        try:
+            previous_weights = active_lora_weights()
+            selected_weights = await run_in_threadpool(
+                switch_lora_weights,
+                LORA_MODELS[selected_model],
+                adapter_name=selected_model,
+            )
+            return JSONResponse(
+                {
+                    "status": "success",
+                    "model": selected_model,
+                    "lora_weights": selected_weights,
+                    "changed": selected_weights != previous_weights,
+                },
+                headers={"X-VLM-Status": "READY"},
+            )
+        except (FileNotFoundError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            ) from exc
+        finally:
+            VLM_LOCK_OPEN = True
 
     @app.websocket("/local-test/ws")
     async def local_test_websocket(
