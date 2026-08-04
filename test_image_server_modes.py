@@ -119,6 +119,29 @@ class ImageServerModeTests(unittest.TestCase):
         ):
             self.assertIsNone(image_server._active_lora_model())
 
+    def test_prompt_follows_active_lora_model(self) -> None:
+        expected_terms = {
+            "constructionsite": "construction-site safety hazards",
+            "inspecsafe": "pipeline safety hazards",
+            "labsafety": "laboratory safety hazards",
+        }
+        for model, expected_term in expected_terms.items():
+            with self.subTest(model=model):
+                with patch.object(
+                    image_server,
+                    "_active_lora_model",
+                    return_value=model,
+                ):
+                    prompt = image_server._prompt_for_active_lora("Base prompt.")
+                self.assertTrue(prompt.startswith("Base prompt."))
+                self.assertIn(expected_term, prompt)
+
+        with patch.object(image_server, "_active_lora_model", return_value=None):
+            self.assertEqual(
+                image_server._prompt_for_active_lora("Base prompt."),
+                "Base prompt.",
+            )
+
     def test_server_defaults_to_configured_lora_for_latency_first(self) -> None:
         with patch.dict(image_server.os.environ, {"VLM_LORA_WEIGHTS": ""}):
             with patch.object(image_server, "configure_lora_weights") as configure:

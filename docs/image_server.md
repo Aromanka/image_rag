@@ -102,7 +102,11 @@ values configured in `config.py`:
 | `labsafety` | `VLM_LORA_WEIGHTS_labsafety` |
 
 ```bash
-curl -X POST "http://SERVER_IP:8000/model/switch?model=inspecsafe"
+curl -X POST "http://SERVER_IP:18000/model/switch?model=inspecsafe"
+
+curl -X POST "http://127.0.0.1:18000/model/switch?model=inspecsafe"
+curl -X POST "http://127.0.0.1:18000/model/switch?model=constructionsite"
+curl -X POST "http://127.0.0.1:18000/model/switch?model=labsafety"
 ```
 
 A successful response is:
@@ -121,6 +125,12 @@ endpoint and `/infer` share the VLM lock. If either operation is already in
 progress, the other returns a `BUSY` response and the client should retry.
 Invalid model values return HTTP 400. `GET /health` reports the active
 `lora_model`, its `lora_weights` path, and all supported `lora_models`.
+
+The selected model also controls the inference prompt automatically; no second
+request parameter is needed. The `constructionsite` prompt explicitly focuses
+on construction-site hazards, `inspecsafe` focuses on pipeline hazards, and
+`labsafety` focuses on laboratory hazards. This scene instruction is applied to
+Accuracy-first, Latency-first, Energy-first, and Balanced inference.
 
 Available startup options include:
 
@@ -354,7 +364,7 @@ send hints for mismatch detection:
 
 ```bash
 curl --data-binary @query.jpg \
-  "http://SERVER_IP:8000/infer?mode=accuracy&local_test_sample_id=SAMPLE_ID"
+  "http://SERVER_IP:18000/infer?mode=accuracy&local_test_sample_id=SAMPLE_ID"
 ```
 
 Hints are stored under `server_query` in JSONL. The record's `association` is
@@ -368,10 +378,27 @@ the full normalized server result.
 Accuracy-first:
 > If a local port transfer is activated for AutoDL server, than SERVER_IP is just `127.0.0.1`
 
+##### Example
+1. terminal 1
+```bash
+ssh -N \
+  -L 18000:127.0.0.1:8000 \
+  -p 21107 \
+  root@connect.westc.seetacloud.com
+```
+
+2. terminal 2(upload image)
+```bash
+curl --data-binary @query_image.jpg \
+  -H "Content-Type: image/jpeg" \
+  "http://127.0.0.1:18000/infer"
+```
+
+##### Commands
 ```bash
 curl --data-binary @query.jpg \
   -H "Content-Type: image/jpeg" \
-  "http://SERVER_IP:8000/infer?mode=accuracy"
+  "http://SERVER_IP:18000/infer?mode=accuracy"
 ```
 
 Latency-first:
@@ -379,7 +406,7 @@ Latency-first:
 ```bash
 curl --data-binary @query.jpg \
   -H "Content-Type: image/jpeg" \
-  "http://SERVER_IP:8000/infer?mode=latency"
+  "http://SERVER_IP:18000/infer?mode=latency"
 ```
 
 Energy-first and Balanced placeholders:

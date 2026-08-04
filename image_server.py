@@ -116,6 +116,21 @@ LORA_MODELS = {
     "labsafety": VLM_LORA_WEIGHTS_labsafety,
 }
 
+LORA_SCENE_PROMPTS = {
+    "constructionsite": (
+        "Focus specifically on construction-site safety hazards, including "
+        "unsafe work practices, missing PPE, equipment, and site conditions."
+    ),
+    "inspecsafe": (
+        "Focus specifically on pipeline safety hazards, including visible "
+        "pipeline, valve, equipment, leakage, and operating risks."
+    ),
+    "labsafety": (
+        "Focus specifically on laboratory safety hazards, including chemicals, "
+        "lab equipment, PPE, handling practices, and workspace conditions."
+    ),
+}
+
 
 def _normalize_lora_model(model: str) -> str:
     normalized = model.strip().lower()
@@ -139,6 +154,15 @@ def _active_lora_model() -> str | None:
         if configured_path.resolve() == active_path:
             return model
     return None
+
+
+def _prompt_for_active_lora(base_prompt: str) -> str:
+    """Add the task-scene instruction selected by the active LoRA model."""
+    model = _active_lora_model()
+    scene_prompt = LORA_SCENE_PROMPTS.get(model or "")
+    if scene_prompt is None:
+        return base_prompt
+    return f"{base_prompt}\n\n{scene_prompt}"
 
 
 def _configure_server_lora(lora_weights: str | Path | None) -> str | Path | None:
@@ -296,7 +320,7 @@ def _run_balanced_inference(
     result = VLM_inference_two_stage_with_RAG(
         SAFETY_JUDGEMENT_TASK,
         image_path,
-        query=BALANCED_SAFETY_PROMPT,
+        query=_prompt_for_active_lora(BALANCED_SAFETY_PROMPT),
         top_k=BALANCED_TOP_K,
         gated_rag=BALANCED_GATE,
         rag_dataset=rag_dataset,
@@ -327,7 +351,7 @@ def _run_inference(
         result = VLM_inference_with_RAG(
             SAFETY_LEVEL_TASK,
             image_path,
-            query=ACCURACY_QUERY,
+            query=_prompt_for_active_lora(ACCURACY_QUERY),
             top_k=top_k,
             gated_rag=ACCURACY_GATE,
             rag_dataset=INSPECSAFE_DATASET,
@@ -338,7 +362,7 @@ def _run_inference(
     result = VLM_inference_two_stage(
         SAFETY_JUDGEMENT_TASK,
         image_path,
-        query=SAFETY_PROMPT,
+        query=_prompt_for_active_lora(SAFETY_PROMPT),
         stage_one_max_new_tokens=stage_one_max_new_tokens,
         stage_two_max_new_tokens=stage_two_max_new_tokens,
     )
